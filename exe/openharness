@@ -1,0 +1,7 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "./lib/openharness/rb"
+require "./lib/openharness/rb/cli/main"
+
+Openharness::Rb::Cli::Main.start(ARGV)
