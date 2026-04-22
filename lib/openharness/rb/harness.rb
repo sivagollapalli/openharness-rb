@@ -35,7 +35,20 @@ module Openharness
       end
 
       def build_tool_registry
-        Tools::ToolRegistry.new
+        registry = Tools::ToolRegistry.new
+        registry.register(Tools::Builtin::ReadFileTool.new)
+        registry.register(Tools::Builtin::WriteToFileTool.new)
+        registry.register(Tools::Builtin::EditFileTool.new)
+        registry.register(Tools::Builtin::GrepTool.new)
+        registry.register(Tools::Builtin::GlobTool.new)
+        registry.register(Tools::Builtin::BashTool.new)
+        registry.register(Tools::Builtin::WebFetchTool.new)
+        registry.register(Tools::Builtin::WebSearchTool.new)
+        registry.register(Tools::Builtin::AgentTool.new)
+        registry.register(Tools::Builtin::LspTool.new)
+        registry.register(Tools::Builtin::NotebookEditTool.new)
+
+        registry
       end
 
       def build_permission_checker

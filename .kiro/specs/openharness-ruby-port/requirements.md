@@ -119,13 +119,7 @@ This document specifies the requirements for **openharness-rb**, a Ruby gem that
 
 #### Acceptance Criteria
 
-1. THE ApiClient interface SHALL define a stream_messages method that accepts an ApiMessageRequest and yields ApiStreamEvent instances
-2. THE AnthropicApiClient SHALL implement the ApiClient interface for the Anthropic Messages API
-3. THE OpenAICompatibleClient SHALL translate Anthropic-style message schemas to OpenAI ChatCompletion format and implement the ApiClient interface
-4. WHEN an API request fails with a retryable error (rate limit or server error), THE ApiClient SHALL retry with exponential backoff and jitter up to a configurable max_retries count
-5. WHEN an API request fails with a non-retryable error (authentication failure), THE ApiClient SHALL raise an AuthenticationFailure error without retrying
-6. WHEN all retry attempts are exhausted, THE ApiClient SHALL raise the last encountered error
-7. THE ApiClient SHALL support OAuth token injection for providers that require it (Copilot, Codex)
+1. Please use https://rubyllm.com/ gem to integrate with LLM APIs like openAI, gemini.
 
 ### Requirement 8: Provider Registry and Auto-Detection
 
@@ -211,11 +205,12 @@ This document specifies the requirements for **openharness-rb**, a Ruby gem that
 
 #### Acceptance Criteria
 
-1. THE BackgroundTaskManager SHALL support starting a named task that runs a command in a background fiber
-2. THE BackgroundTaskManager SHALL support listing all active tasks with their names and statuses
-3. THE BackgroundTaskManager SHALL support stopping a task by name, terminating its underlying process
-4. THE BackgroundTaskManager SHALL support retrieving the latest output (stdout and stderr) of a running task by name
-5. IF a task with the given name does not exist, THEN THE BackgroundTaskManager SHALL raise a TaskNotFoundError
+1. Please use async gem https://socketry.github.io/async/guides/getting-started/index to work with fibers
+2. THE BackgroundTaskManager SHALL support starting a named task that runs a command in a background fiber
+3. THE BackgroundTaskManager SHALL support listing all active tasks with their names and statuses
+4. THE BackgroundTaskManager SHALL support stopping a task by name, terminating its underlying process
+5. THE BackgroundTaskManager SHALL support retrieving the latest output (stdout and stderr) of a running task by name
+6. IF a task with the given name does not exist, THEN THE BackgroundTaskManager SHALL raise a TaskNotFoundError
 
 ### Requirement 16: Permission Checker
 
