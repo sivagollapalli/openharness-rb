@@ -41,7 +41,10 @@ module Openharness
           model: @settings.model,
           tools: default_tools,
           system_prompt_builder: build_system_prompt_builder,
-          provider_config: build_provider_config
+          provider_config: build_provider_config,
+          max_turns: @settings.max_turns,
+          permission_checker: @permission_checker,
+          hook_executor: @hook_executor
         )
       end
 
@@ -56,8 +59,8 @@ module Openharness
       end
 
       def build_system_prompt_builder
-        memory = Memory::MemorySystem.new
-        
+        memory = Memory::MemorySystem.new(  )
+
         Engine::SystemPromptBuilder.new(
           skill_registry: nil,
           memory_system: memory,
