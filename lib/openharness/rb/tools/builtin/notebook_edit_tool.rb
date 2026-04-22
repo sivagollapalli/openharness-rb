@@ -2,12 +2,15 @@
 
 require "ruby_llm"
 require "json"
+require_relative "permission_guard"
 
 module Openharness
   module Rb
     module Tools
       module Builtin
         class NotebookEditTool < RubyLLM::Tool
+          include PermissionGuard
+
           description "Read or edit a cell in a Jupyter notebook (.ipynb) file"
 
           param :path, desc: "Notebook file path relative to working directory"
@@ -15,6 +18,14 @@ module Openharness
           param :new_content, desc: "New content for the cell (omit to read)", required: false
 
           def execute(path:, cell_index:, new_content: nil)
+            # Only check permission when writing (new_content provided)
+            if new_content
+              case check_permission!
+              when :denied then return permission_denied_message("Mutating tool blocked")
+              when :denied_by_user then return user_denied_message
+              end
+            end
+
             file_path = File.expand_path(path, working_dir)
             notebook = JSON.parse(File.read(file_path))
             cells = notebook["cells"] || []

@@ -12,29 +12,12 @@ module Openharness
     module Engine
       # QueryEngine implements a ReAct (Reason → Act → Observe) agent loop.
       #
-      # How it works:
-      #
-      #   1. User sends a task/question
-      #   2. LLM THINKS about the task, decides what to do
-      #   3. LLM ACTS by calling tools (RubyLLM executes them automatically)
-      #   4. LLM OBSERVES the tool results (they're in the conversation history)
-      #   5. LLM REASONS about the results — decides to:
-      #      a) Call more tools (loop continues)
-      #      b) Produce a final text answer (loop ends)
-      #
-      # RubyLLM's chat.ask handles steps 2-4 in a single call. The conversation
-      # history is maintained by RubyLLM, so the agent always sees all previous
-      # tool results when reasoning about the next step.
-      #
-      # The outer loop exists to:
-      #   - Enforce max_turns as a safety limit
-      #   - Run permission checks before tool execution
-      #   - Dispatch lifecycle hooks (PRE_TOOL_USE, POST_TOOL_USE)
-      #   - Track costs across turns
-      #   - Emit StreamEvents for UI
-      #
-      # The agent decides when it's done — when it responds with text and no
-      # tool calls, that's the final answer. No artificial "continue" prompts.
+      # Permission enforcement:
+      #   Each mutating tool (bash, write_to_file, edit_file, notebook_edit)
+      #   includes PermissionGuard which checks Thread.current[:openharness_permission_checker]
+      #   before executing. The QueryEngine sets this thread-local before each query.
+      #   This way permission checks happen inside the tool's execute method,
+      #   which is the only place we can actually block execution in RubyLLM.
       class QueryEngine
         include Api::RetryHandler
 
@@ -54,6 +37,7 @@ module Openharness
 
           Important:
           - Always check tool results before proceeding. If a tool returns an error, address it.
+          - If a tool returns a permission denied error, inform the user and do not retry that tool.
           - When the task is fully complete, respond with your final answer as plain text (no tool calls).
           - Be thorough but efficient. Don't repeat steps that already succeeded.
         PROMPT
@@ -66,7 +50,9 @@ module Openharness
           provider_config: nil,
           max_turns: 10,
           permission_checker: nil,
-          hook_executor: nil
+          hook_executor: nil,
+          input: $stdin,
+          output: $stdout
         )
           configure_ruby_llm(provider_config) if provider_config
 
@@ -77,47 +63,43 @@ module Openharness
           @hook_executor = hook_executor
           @cost_tracker = CostTracker.new
           @turn_count = 0
+          @input = input
+          @output = output
 
-          # Build system prompt: ReAct instructions + user context (skills, memory, project)
           user_context = system_prompt || system_prompt_builder&.build
           @system_prompt = build_full_system_prompt(user_context)
           @chat = build_chat
         end
 
-        # Run the ReAct loop for a user message.
-        #
-        # The agent will think, use tools, observe results, and iterate until
-        # it produces a final text answer or hits max_turns.
-        #
-        # Yields StreamEvent instances for real-time UI updates.
-        # Returns the final RubyLLM::Message.
         def ask(message, &event_handler)
-          # First turn: send the user's actual message
-          response = execute_turn(message, event_handler)
+          begin 
+            # Set thread-locals so PermissionGuard in tools can access them
+            Thread.current[:openharness_permission_checker] = @permission_checker
+            Thread.current[:openharness_input] = @input
+            Thread.current[:openharness_output] = @output
 
-          # If the agent used tools, it may need more turns to finish.
-          # RubyLLM already fed tool results back into the conversation,
-          # so the agent sees everything when we call ask again.
-          #
-          # We DON'T send a canned "continue" message. Instead, we let
-          # the agent's own response drive the next turn. If it used tools,
-          # we ask it to reflect on the results and decide next steps.
-          while used_tools_this_turn?
-            response = execute_turn(nil, event_handler)
+            response = execute_turn(message, event_handler)
+
+            while used_tools_this_turn?
+              response = execute_turn(nil, event_handler)
+            end
+
+            event_handler&.call(Models::AssistantTurnComplete.new(stop_reason: "end_turn"))
+            response
+          ensure
+            # Clean up thread-locals
+            Thread.current[:openharness_permission_checker] = nil
+            Thread.current[:openharness_input] = nil
+            Thread.current[:openharness_output] = nil
           end
-
-          event_handler&.call(Models::AssistantTurnComplete.new(stop_reason: "end_turn"))
-          response
         end
 
-        # Reset conversation history
         def clear!
           @chat = build_chat
           @turn_count = 0
           @tool_called_this_turn = false
         end
 
-        # Add a tool at runtime
         def add_tool(tool)
           @tools << tool
           @chat.with_tool(tool)
@@ -134,7 +116,6 @@ module Openharness
             raise MaxTurnsExceeded, "Exceeded max turns (#{@max_turns})"
           end
 
-          # Emit turn start so the UI can show progress
           event_handler&.call(Models::TurnStarted.new(
             turn_number: @turn_count,
             max_turns: @max_turns
@@ -144,18 +125,9 @@ module Openharness
           setup_callbacks(event_handler)
 
           response = with_retry do
-            if message
-              # User message or explicit follow-up
-              @chat.ask(message) do |chunk|
-                emit_text_delta(chunk, event_handler)
-              end
-            else
-              # No message — the agent continues from where it left off.
-              # RubyLLM's conversation history has all the tool results.
-              # We send a minimal nudge that lets the agent reason freely.
-              @chat.ask("Review the results above. If the task is complete, provide your final answer. Otherwise, continue with the next step.") do |chunk|
-                emit_text_delta(chunk, event_handler)
-              end
+            prompt = message || "Review the results above. If the task is complete, provide your final answer. Otherwise, continue with the next step."
+            @chat.ask(prompt) do |chunk|
+              emit_text_delta(chunk, event_handler)
             end
           end
 
@@ -176,9 +148,6 @@ module Openharness
           @chat.on_tool_call do |tool_call|
             @tool_called_this_turn = true
 
-            # Permission check
-            check_permission(tool_call, event_handler)
-
             # Pre-tool hook
             dispatch_hook(Hooks::HookEvent::PRE_TOOL_USE, tool_call, event_handler)
 
@@ -189,7 +158,6 @@ module Openharness
           end
 
           @chat.on_tool_result do |result|
-            # Post-tool hook
             if @hook_executor
               @hook_executor.dispatch(
                 Hooks::HookEvent::POST_TOOL_USE,
@@ -202,17 +170,6 @@ module Openharness
               result: Models::ToolResult.new(text: result.to_s)
             ))
           end
-        end
-
-        def check_permission(tool_call, event_handler)
-          return unless @permission_checker
-
-          decision = @permission_checker.evaluate(tool_name: tool_call.name.to_s)
-          return unless decision.status == "denied"
-
-          event_handler&.call(Models::ErrorOccurred.new(
-            error: "Permission denied for '#{tool_call.name}': #{decision.reason}"
-          ))
         end
 
         def dispatch_hook(event, tool_call, event_handler)
@@ -232,7 +189,7 @@ module Openharness
         end
 
         def track_usage(response)
-          return unless response.respond_to?(:input_tokens) && response.input_tokens
+          return unless response&.respond_to?(:input_tokens) && response.input_tokens
 
           @cost_tracker.record(
             input_tokens: response.input_tokens || 0,

@@ -87,7 +87,7 @@ module Openharness
 
       def build_permission_checker
         Permissions::PermissionChecker.new(
-          mode: @settings.permission_mode.to_s,
+          mode: @settings.permission_mode,
           denied_tools: @settings.denied_tools,
           allowed_tools: @settings.allowed_tools,
           path_rules: @settings.path_rules.map { |r|

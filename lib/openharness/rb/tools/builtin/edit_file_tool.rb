@@ -1,12 +1,15 @@
 # frozen_string_literal: true
 
 require "ruby_llm"
+require_relative "permission_guard"
 
 module Openharness
   module Rb
     module Tools
       module Builtin
         class EditFileTool < RubyLLM::Tool
+          include PermissionGuard
+
           description "Apply a text replacement (old_str -> new_str) to a file. old_str must match exactly once."
 
           param :path, desc: "File path relative to working directory"
@@ -14,6 +17,11 @@ module Openharness
           param :new_str, desc: "Replacement text"
 
           def execute(path:, old_str:, new_str:)
+            case check_permission!
+            when :denied then return permission_denied_message("Mutating tool blocked")
+            when :denied_by_user then return user_denied_message
+            end
+
             file_path = File.expand_path(path, working_dir)
             content = File.read(file_path)
             occurrences = content.scan(old_str).length
