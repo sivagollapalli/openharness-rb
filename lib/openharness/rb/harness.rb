@@ -3,20 +3,32 @@
 module Openharness
   module Rb
     class Harness
-      attr_reader :settings, :api_adapter, :tool_registry, :permission_checker,
-                  :hook_executor, :query_engine
+      attr_reader :settings, :api_adapter, :tools, :permission_checker, :hook_executor
 
       def initialize(settings: nil, **overrides)
         @settings = settings || Config::Settings.new(**overrides)
         @api_adapter = build_api_adapter
-        @tool_registry = build_tool_registry
+        @tools = default_tools
         @permission_checker = build_permission_checker
         @hook_executor = build_hook_executor
-        @query_engine = build_query_engine
       end
 
+      # Run a query with all registered tools.
+      # Yields StreamEvent instances for real-time UI updates.
+      # Returns the final RubyLLM::Message.
       def query(message, &event_handler)
-        @query_engine.run_query(message, &event_handler)
+        ENV["OPENHARNESS_CWD"] = @settings.respond_to?(:cwd) ? @settings.cwd : Dir.pwd
+        @api_adapter.ask(message, tools: @tools, &event_handler)
+      end
+
+      # Add a RubyLLM::Tool class or instance to the tool list.
+      def add_tool(tool)
+        @tools << tool
+      end
+
+      # Replace all tools.
+      def set_tools(*tool_list)
+        @tools = tool_list.flatten
       end
 
       private
@@ -34,21 +46,20 @@ module Openharness
         )
       end
 
-      def build_tool_registry
-        registry = Tools::ToolRegistry.new
-        registry.register(Tools::Builtin::ReadFileTool.new)
-        registry.register(Tools::Builtin::WriteToFileTool.new)
-        registry.register(Tools::Builtin::EditFileTool.new)
-        registry.register(Tools::Builtin::GrepTool.new)
-        registry.register(Tools::Builtin::GlobTool.new)
-        registry.register(Tools::Builtin::BashTool.new)
-        registry.register(Tools::Builtin::WebFetchTool.new)
-        registry.register(Tools::Builtin::WebSearchTool.new)
-        registry.register(Tools::Builtin::AgentTool.new)
-        registry.register(Tools::Builtin::LspTool.new)
-        registry.register(Tools::Builtin::NotebookEditTool.new)
-
-        registry
+      def default_tools
+        [
+          Tools::Builtin::ReadFileTool,
+          Tools::Builtin::WriteToFileTool,
+          Tools::Builtin::EditFileTool,
+          Tools::Builtin::GrepTool,
+          Tools::Builtin::GlobTool,
+          Tools::Builtin::BashTool,
+          Tools::Builtin::WebFetchTool,
+          Tools::Builtin::WebSearchTool,
+          Tools::Builtin::AgentTool,
+          Tools::Builtin::LspTool,
+          Tools::Builtin::NotebookEditTool,
+        ]
       end
 
       def build_permission_checker
@@ -66,18 +77,6 @@ module Openharness
       def build_hook_executor
         registry = Hooks::HookRegistry.new
         Hooks::HookExecutor.new(registry: registry, llm_adapter: @api_adapter)
-      end
-
-      def build_query_engine
-        context = Models::QueryContext.new(
-          max_turns: @settings.max_turns
-        )
-        Engine::QueryEngine.new(
-          api_adapter: @api_adapter,
-          tool_registry: @tool_registry,
-          permission_checker: @permission_checker,
-          context: context
-        )
       end
     end
   end

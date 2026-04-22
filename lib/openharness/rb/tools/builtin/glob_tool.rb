@@ -1,40 +1,27 @@
 # frozen_string_literal: true
 
-require_relative "../base_tool"
+require "ruby_llm"
 
 module Openharness
   module Rb
     module Tools
       module Builtin
-        class GlobTool < BaseTool
-          def name
-            "glob"
-          end
+        class GlobTool < RubyLLM::Tool
+          description "List file paths matching a glob pattern relative to the working directory"
 
-          def description
-            "Return a list of file paths matching a given glob pattern relative to the working directory"
-          end
+          param :pattern, desc: "Glob pattern (e.g. '**/*.rb', 'src/**/*.js')"
 
-          def input_schema
-            {
-              type: "object",
-              properties: {
-                pattern: { type: "string", description: "Glob pattern (e.g. '**/*.rb')" }
-              },
-              required: ["pattern"]
-            }
+          def execute(pattern:)
+            full_pattern = File.join(working_dir, pattern)
+            paths = Dir.glob(full_pattern).select { |f| File.file?(f) }
+            relative = paths.map { |p| p.sub("#{working_dir}/", "") }
+            relative.empty? ? "No files matched pattern: #{pattern}" : relative.join("\n")
           end
 
           private
 
-          def execute(input, context)
-            pattern = input[:pattern] || input["pattern"]
-            full_pattern = File.join(context.cwd, pattern)
-
-            paths = Dir.glob(full_pattern).select { |f| File.file?(f) }
-            relative_paths = paths.map { |p| p.sub("#{context.cwd}/", "") }
-
-            Models::ToolResult.new(text: relative_paths.join("\n"))
+          def working_dir
+            ENV["OPENHARNESS_CWD"] || Dir.pwd
           end
         end
       end

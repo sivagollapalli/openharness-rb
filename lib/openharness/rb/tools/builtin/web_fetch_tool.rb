@@ -1,49 +1,29 @@
 # frozen_string_literal: true
 
+require "ruby_llm"
 require "faraday"
-require_relative "../base_tool"
 
 module Openharness
   module Rb
     module Tools
       module Builtin
-        class WebFetchTool < BaseTool
-          def name
-            "web_fetch"
-          end
+        class WebFetchTool < RubyLLM::Tool
+          description "Fetch the content of a web page at a given URL"
 
-          def description
-            "Fetch the content of a web page at a given URL"
-          end
+          param :url, desc: "URL to fetch"
 
-          def input_schema
-            {
-              type: "object",
-              properties: {
-                url: { type: "string", description: "URL to fetch" }
-              },
-              required: ["url"]
-            }
-          end
-
-          private
-
-          def execute(input, _context)
-            url = input[:url] || input["url"]
+          def execute(url:)
             response = Faraday.get(url)
 
             if response.status >= 200 && response.status < 300
-              Models::ToolResult.new(text: response.body)
+              response.body
             else
-              Models::ToolResult.new(
-                text: "HTTP #{response.status}: Failed to fetch #{url}",
-                is_error: true
-              )
+              { error: "HTTP #{response.status}: Failed to fetch #{url}" }
             end
           rescue Faraday::ConnectionFailed => e
-            Models::ToolResult.new(text: "Connection failed: #{e.message}", is_error: true)
+            { error: "Connection failed: #{e.message}" }
           rescue Faraday::TimeoutError => e
-            Models::ToolResult.new(text: "Request timed out: #{e.message}", is_error: true)
+            { error: "Request timed out: #{e.message}" }
           end
         end
       end

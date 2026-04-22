@@ -1,63 +1,43 @@
 # frozen_string_literal: true
 
+require "ruby_llm"
 require "json"
-require_relative "../base_tool"
 
 module Openharness
   module Rb
     module Tools
       module Builtin
-        class NotebookEditTool < BaseTool
-          def name
-            "notebook_edit"
-          end
+        class NotebookEditTool < RubyLLM::Tool
+          description "Read or edit a cell in a Jupyter notebook (.ipynb) file"
 
-          def description
-            "Read or edit a cell in a Jupyter notebook (.ipynb) file"
-          end
+          param :path, desc: "Notebook file path relative to working directory"
+          param :cell_index, type: :integer, desc: "Index of the cell to read or edit (0-based)"
+          param :new_content, desc: "New content for the cell (omit to read)", required: false
 
-          def input_schema
-            {
-              type: "object",
-              properties: {
-                path: { type: "string", description: "Notebook file path relative to cwd" },
-                cell_index: { type: "integer", description: "Index of the cell to read or edit (0-based)" },
-                new_content: { type: "string", description: "New content for the cell (omit to read)" }
-              },
-              required: %w[path cell_index]
-            }
-          end
-
-          private
-
-          def execute(input, context)
-            path = input[:path] || input["path"]
-            cell_index = input[:cell_index] || input["cell_index"]
-            new_content = input[:new_content] || input["new_content"]
-            file_path = File.expand_path(path, context.cwd)
-
+          def execute(path:, cell_index:, new_content: nil)
+            file_path = File.expand_path(path, working_dir)
             notebook = JSON.parse(File.read(file_path))
             cells = notebook["cells"] || []
 
-            if cell_index < 0 || cell_index >= cells.length
-              return Models::ToolResult.new(
-                text: "Cell index #{cell_index} out of range (0..#{cells.length - 1})",
-                is_error: true
-              )
-            end
+            return { error: "Cell index #{cell_index} out of range (0..#{cells.length - 1})" } if cell_index < 0 || cell_index >= cells.length
 
             if new_content
               cells[cell_index]["source"] = new_content.lines
               File.write(file_path, JSON.pretty_generate(notebook))
-              Models::ToolResult.new(text: "Cell #{cell_index} updated in #{path}")
+              "Cell #{cell_index} updated in #{path}"
             else
-              source = Array(cells[cell_index]["source"]).join
-              Models::ToolResult.new(text: source)
+              Array(cells[cell_index]["source"]).join
             end
           rescue Errno::ENOENT
-            Models::ToolResult.new(text: "Notebook not found: #{path}", is_error: true)
+            { error: "Notebook not found: #{path}" }
           rescue JSON::ParserError => e
-            Models::ToolResult.new(text: "Invalid notebook JSON: #{e.message}", is_error: true)
+            { error: "Invalid notebook JSON: #{e.message}" }
+          end
+
+          private
+
+          def working_dir
+            ENV["OPENHARNESS_CWD"] || Dir.pwd
           end
         end
       end

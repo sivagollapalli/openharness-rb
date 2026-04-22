@@ -1,46 +1,25 @@
 # frozen_string_literal: true
 
-require_relative "../base_tool"
+require "ruby_llm"
 
 module Openharness
   module Rb
     module Tools
       module Builtin
-        class StopTaskTool < BaseTool
-          def initialize(task_manager:)
+        class StopTaskTool < RubyLLM::Tool
+          description "Stop a running background task by name"
+
+          param :task_name, desc: "Name of the task to stop"
+
+          def initialize(task_manager)
             @task_manager = task_manager
-            super()
           end
 
-          def name
-            "stop_task"
-          end
-
-          def description
-            "Stop a running background task by name"
-          end
-
-          def input_schema
-            {
-              type: "object",
-              properties: {
-                task_name: { type: "string", description: "Name of the task to stop" }
-              },
-              required: ["task_name"]
-            }
-          end
-
-          private
-
-          def execute(input, _context)
-            task_name = input[:task_name] || input["task_name"]
+          def execute(task_name:)
             @task_manager.stop(task_name)
-            Models::ToolResult.new(text: "Background task '#{task_name}' stopped.")
-          rescue TaskNotFoundError
-            Models::ToolResult.new(
-              text: "No task found with name '#{task_name}'.",
-              is_error: true
-            )
+            "Background task '#{task_name}' stopped."
+          rescue Openharness::Rb::TaskNotFoundError
+            { error: "No task found with name '#{task_name}'." }
           end
         end
       end

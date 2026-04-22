@@ -1,63 +1,36 @@
 # frozen_string_literal: true
 
-require_relative "../base_tool"
+require "ruby_llm"
 
 module Openharness
   module Rb
     module Tools
       module Builtin
-        class EditFileTool < BaseTool
-          def name
-            "edit_file"
-          end
+        class EditFileTool < RubyLLM::Tool
+          description "Apply a text replacement (old_str -> new_str) to a file. old_str must match exactly once."
 
-          def description
-            "Apply a text replacement (old_str -> new_str) to a file"
-          end
+          param :path, desc: "File path relative to working directory"
+          param :old_str, desc: "Text to find and replace (must match exactly once)"
+          param :new_str, desc: "Replacement text"
 
-          def input_schema
-            {
-              type: "object",
-              properties: {
-                path: { type: "string", description: "File path relative to cwd" },
-                old_str: { type: "string", description: "Text to find and replace" },
-                new_str: { type: "string", description: "Replacement text" }
-              },
-              required: %w[path old_str new_str]
-            }
+          def execute(path:, old_str:, new_str:)
+            file_path = File.expand_path(path, working_dir)
+            content = File.read(file_path)
+            occurrences = content.scan(old_str).length
+
+            return { error: "old_str not found in #{path}" } if occurrences.zero?
+            return { error: "old_str matches #{occurrences} locations in #{path}; must match exactly one" } if occurrences > 1
+
+            File.write(file_path, content.sub(old_str, new_str))
+            "Successfully edited #{path}"
+          rescue Errno::ENOENT
+            { error: "File not found: #{path}" }
           end
 
           private
 
-          def execute(input, context)
-            path = input[:path] || input["path"]
-            old_str = input[:old_str] || input["old_str"]
-            new_str = input[:new_str] || input["new_str"]
-            file_path = File.expand_path(path, context.cwd)
-
-            content = File.read(file_path)
-            occurrences = content.scan(old_str).length
-
-            if occurrences.zero?
-              return Models::ToolResult.new(
-                text: "old_str not found in #{path}",
-                is_error: true
-              )
-            end
-
-            if occurrences > 1
-              return Models::ToolResult.new(
-                text: "old_str matches #{occurrences} locations in #{path}; must match exactly one",
-                is_error: true
-              )
-            end
-
-            new_content = content.sub(old_str, new_str)
-            File.write(file_path, new_content)
-
-            Models::ToolResult.new(text: "Successfully edited #{path}")
-          rescue Errno::ENOENT
-            Models::ToolResult.new(text: "File not found: #{path}", is_error: true)
+          def working_dir
+            ENV["OPENHARNESS_CWD"] || Dir.pwd
           end
         end
       end

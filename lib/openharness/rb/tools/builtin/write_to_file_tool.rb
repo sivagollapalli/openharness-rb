@@ -1,43 +1,31 @@
 # frozen_string_literal: true
 
+require "ruby_llm"
 require "fileutils"
-require_relative "../base_tool"
 
 module Openharness
   module Rb
     module Tools
       module Builtin
-        class WriteToFileTool < BaseTool
-          def name
-            "write_to_file"
-          end
+        class WriteToFileTool < RubyLLM::Tool
+          description "Write content to a file, creating parent directories as needed"
 
-          def description
-            "Write content to a file at a given path relative to the working directory, creating parent directories as needed"
-          end
+          param :path, desc: "File path relative to working directory"
+          param :content, desc: "Content to write to the file"
 
-          def input_schema
-            {
-              type: "object",
-              properties: {
-                path: { type: "string", description: "File path relative to cwd" },
-                content: { type: "string", description: "Content to write to the file" }
-              },
-              required: %w[path content]
-            }
+          def execute(path:, content:)
+            file_path = File.expand_path(path, working_dir)
+            FileUtils.mkdir_p(File.dirname(file_path))
+            File.write(file_path, content)
+            "Successfully wrote #{content.length} bytes to #{path}"
+          rescue Errno::EACCES
+            { error: "Permission denied: #{path}" }
           end
 
           private
 
-          def execute(input, context)
-            path = input[:path] || input["path"]
-            content = input[:content] || input["content"]
-            file_path = File.expand_path(path, context.cwd)
-
-            FileUtils.mkdir_p(File.dirname(file_path))
-            File.write(file_path, content)
-
-            Models::ToolResult.new(text: "Successfully wrote to #{path}")
+          def working_dir
+            ENV["OPENHARNESS_CWD"] || Dir.pwd
           end
         end
       end

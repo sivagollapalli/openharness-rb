@@ -1,37 +1,29 @@
 # frozen_string_literal: true
 
-require_relative "../base_tool"
+require "ruby_llm"
 
 module Openharness
   module Rb
     module Tools
       module Builtin
-        class ReadFileTool < BaseTool
-          def name
-            "read_file"
-          end
+        class ReadFileTool < RubyLLM::Tool
+          description "Read the contents of a file at a given path relative to the working directory"
 
-          def description
-            "Read the contents of a file at a given path relative to the working directory"
-          end
+          param :path, desc: "File path relative to working directory"
 
-          def input_schema
-            {
-              type: "object",
-              properties: {
-                path: { type: "string", description: "File path relative to cwd" }
-              },
-              required: ["path"]
-            }
+          def execute(path:)
+            file_path = File.expand_path(path, working_dir)
+            File.read(file_path)
+          rescue Errno::ENOENT
+            { error: "File not found: #{path}" }
+          rescue Errno::EACCES
+            { error: "Permission denied: #{path}" }
           end
 
           private
 
-          def execute(input, context)
-            file_path = File.expand_path(input[:path] || input["path"], context.cwd)
-            Models::ToolResult.new(text: File.read(file_path))
-          rescue Errno::ENOENT
-            Models::ToolResult.new(text: "File not found: #{input[:path] || input["path"]}", is_error: true)
+          def working_dir
+            ENV["OPENHARNESS_CWD"] || Dir.pwd
           end
         end
       end

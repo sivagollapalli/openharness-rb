@@ -1,49 +1,34 @@
 # frozen_string_literal: true
 
+require "ruby_llm"
 require "open3"
 require "timeout"
-require_relative "../base_tool"
 
 module Openharness
   module Rb
     module Tools
       module Builtin
-        class BashTool < BaseTool
-          DEFAULT_TIMEOUT = 120
+        class BashTool < RubyLLM::Tool
+          description "Execute a shell command in a subprocess with configurable timeout"
 
-          def name
-            "bash"
-          end
+          param :command, desc: "Shell command to execute"
+          param :timeout, type: :integer, desc: "Timeout in seconds (default: 120)", required: false
 
-          def description
-            "Execute a shell command in a subprocess with configurable timeout"
-          end
+          def execute(command:, timeout: 120)
+            stdout, stderr, _status = Timeout.timeout(timeout) do
+              Open3.capture3(command, chdir: working_dir)
+            end
 
-          def input_schema
-            {
-              type: "object",
-              properties: {
-                command: { type: "string", description: "Shell command to execute" },
-                timeout: { type: "integer", description: "Timeout in seconds (default: 120)" }
-              },
-              required: ["command"]
-            }
+            output = [stdout, stderr].reject(&:empty?).join("\n").strip
+            output.empty? ? "(no output)" : output
+          rescue Timeout::Error
+            { error: "Command timed out after #{timeout}s" }
           end
 
           private
 
-          def execute(input, context)
-            command = input[:command] || input["command"]
-            timeout = input[:timeout] || input["timeout"] || DEFAULT_TIMEOUT
-
-            stdout, stderr, _status = Timeout.timeout(timeout) do
-              Open3.capture3(command, chdir: context.cwd)
-            end
-
-            output = [stdout, stderr].reject(&:empty?).join("\n").strip
-            Models::ToolResult.new(text: output.empty? ? "(no output)" : output)
-          rescue Timeout::Error
-            Models::ToolResult.new(text: "Command timed out after #{timeout}s", is_error: true)
+          def working_dir
+            ENV["OPENHARNESS_CWD"] || Dir.pwd
           end
         end
       end

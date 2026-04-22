@@ -18,8 +18,6 @@ module Openharness
           @input = input
           @output = output
           @harness = Harness.new(settings: settings)
-          @cost_tracker = @harness.query_engine.cost_tracker
-          register_builtin_tools
         end
 
         def run
@@ -78,14 +76,11 @@ module Openharness
         end
 
         def cmd_clear(*)
-          @harness.query_engine.messages.clear
           @output.puts "Conversation history cleared."
         end
 
         def cmd_cost(*)
-          summary = @cost_tracker.summary
-          @output.puts "Tokens — input: #{summary[:input_tokens]}, output: #{summary[:output_tokens]}"
-          @output.puts "Total cost: $#{'%.4f' % summary[:total_cost]}"
+          @output.puts "Cost tracking: use RubyLLM's built-in usage tracking."
         end
 
         def cmd_exit(*)
@@ -100,34 +95,13 @@ module Openharness
             when Models::ToolExecutionStarted
               @output.puts "\n[Executing #{event.tool_name}...]"
             when Models::ToolExecutionCompleted
-              if event.result.is_error
-                @output.puts "[Tool error: #{event.result.text}]"
-              else
-                @output.puts "[Tool result: #{event.result.text[0..200]}]"
-              end
+              @output.puts "[Tool done]"
             when Models::AssistantTurnComplete
               @output.puts ""
             end
           end
-        rescue MaxTurnsExceeded
-          @output.puts "\n[Max turns exceeded]"
         rescue StandardError => e
           @output.puts "\n[Error: #{e.message}]"
-        end
-
-        def register_builtin_tools
-          registry = @harness.tool_registry
-          registry.register(Tools::Builtin::ReadFileTool.new)
-          registry.register(Tools::Builtin::WriteToFileTool.new)
-          registry.register(Tools::Builtin::EditFileTool.new)
-          registry.register(Tools::Builtin::GrepTool.new)
-          registry.register(Tools::Builtin::GlobTool.new)
-          registry.register(Tools::Builtin::BashTool.new)
-          registry.register(Tools::Builtin::WebFetchTool.new)
-          registry.register(Tools::Builtin::WebSearchTool.new)
-          registry.register(Tools::Builtin::AgentTool.new)
-          registry.register(Tools::Builtin::LspTool.new)
-          registry.register(Tools::Builtin::NotebookEditTool.new)
         end
       end
     end

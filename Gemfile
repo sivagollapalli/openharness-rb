@@ -7,5 +7,7 @@ gemspec
 
 gem "irb"
 gem "rake", "~> 13.0"
+gem 'pry'
+gem 'pry-nav'
 
 gem "minitest", "~> 5.16"
