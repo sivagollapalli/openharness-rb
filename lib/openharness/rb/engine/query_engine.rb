@@ -1,153 +1,99 @@
 # frozen_string_literal: true
 
+require "ruby_llm"
 require_relative "cost_tracker"
+require_relative "system_prompt_builder"
 require_relative "../errors"
-require_relative "../models/conversation_message"
-require_relative "../models/content_block"
 require_relative "../models/stream_events"
+require_relative "../api/retry_handler"
 
 module Openharness
   module Rb
     module Engine
       class QueryEngine
-        attr_reader :messages, :turn_count, :cost_tracker
+        include Api::RetryHandler
 
-        def initialize(api_adapter:, tool_registry:, permission_checker:, context:)
-          @api = api_adapter
-          @tools = tool_registry
-          @permissions = permission_checker
-          @context = context
-          @messages = []
+        attr_reader :cost_tracker, :chat
+
+        # @param model [String] RubyLLM model identifier (e.g. "gpt-4o", "claude-sonnet-4-20250514")
+        # @param tools [Array<Class<RubyLLM::Tool>>] tool classes to register with the chat
+        # @param system_prompt [String, nil] explicit system prompt (overrides builder)
+        # @param system_prompt_builder [SystemPromptBuilder, nil] builds system prompt from context
+        # @param provider_config [Hash, nil] API keys for RubyLLM configuration
+        def initialize(model:, tools: [], system_prompt: nil, system_prompt_builder: nil, provider_config: nil)
+          configure_ruby_llm(provider_config) if provider_config
+
+          @model = model
+          @tools = tools
           @cost_tracker = CostTracker.new
-          @turn_count = 0
+
+          prompt = system_prompt || system_prompt_builder&.build
+          @chat = RubyLLM.chat(model: @model)
+          @chat.with_instructions(prompt) if prompt
+          @chat.with_tools(*@tools) unless @tools.empty?
         end
 
-        def run_query(user_message, &event_handler)
-          @messages << Models::ConversationMessage.new(
-            role: "user",
-            content_blocks: [
-              Models::ContentBlock.new(type: "text", content: { text: user_message })
-            ]
-          )
-
-          loop do
-            @turn_count += 1
-            raise MaxTurnsExceeded, "Exceeded max turns (#{@context.max_turns})" if @turn_count > @context.max_turns
-
-            compact_if_needed!
-
-            response = @api.stream_messages(@messages, tools: @tools.schemas) do |event|
-              event_handler&.call(event)
+        # Ask a question. RubyLLM handles the full tool-calling loop internally.
+        # Yields StreamEvent instances for real-time UI updates.
+        # Returns the final RubyLLM::Message.
+        def ask(message, &event_handler)
+          with_retry do
+            @chat.on_tool_call do |tool_call|
+              event_handler&.call(Models::ToolExecutionStarted.new(
+                tool_name: tool_call.name.to_s,
+                tool_use_id: tool_call.id.to_s
+              ))
             end
 
-            tool_uses = extract_tool_uses(response)
-
-            if tool_uses.empty?
-              append_assistant_response(response)
-              event_handler&.call(Models::AssistantTurnComplete.new(stop_reason: "end_turn"))
-              break
+            @chat.on_tool_result do |result|
+              event_handler&.call(Models::ToolExecutionCompleted.new(
+                tool_use_id: "latest",
+                result: Models::ToolResult.new(text: result.to_s)
+              ))
             end
 
-            append_assistant_response(response)
-            results = execute_tools_concurrently(tool_uses, &event_handler)
-            append_tool_results(tool_uses, results)
+            response = @chat.ask(message) do |chunk|
+              if chunk.content
+                event_handler&.call(Models::AssistantTextDelta.new(text: chunk.content))
+              end
+            end
+
+            # Track usage if available
+            if response.respond_to?(:input_tokens)
+              @cost_tracker.record(
+                input_tokens: response.input_tokens || 0,
+                output_tokens: response.output_tokens || 0,
+                cost: 0.0
+              )
+            end
+
+            event_handler&.call(Models::AssistantTurnComplete.new(stop_reason: "end_turn"))
+            response
           end
+        end
+
+        # Reset conversation history (starts a fresh chat with same config)
+        def clear!
+          prompt = @chat.respond_to?(:instructions) ? @chat.instructions : nil
+          @chat = RubyLLM.chat(model: @model)
+          @chat.with_instructions(prompt) if prompt
+          @chat.with_tools(*@tools) unless @tools.empty?
+        end
+
+        # Add a tool to the chat at runtime
+        def add_tool(tool)
+          @tools << tool
+          @chat.with_tool(tool)
         end
 
         private
 
-        def execute_tools_concurrently(tool_uses, &event_handler)
-          # Sequential execution for now; Async integration can come later
-          tool_uses.map do |tu|
-            event_handler&.call(Models::ToolExecutionStarted.new(
-              tool_name: tu[:name], tool_use_id: tu[:id]
-            ))
-            result = @tools.execute(tu[:name], tu[:input], build_tool_context)
-            event_handler&.call(Models::ToolExecutionCompleted.new(
-              tool_use_id: tu[:id], result: result
-            ))
-            result
+        def configure_ruby_llm(config)
+          RubyLLM.configure do |c|
+            c.openai_api_key = config[:openai_api_key] if config[:openai_api_key]
+            c.anthropic_api_key = config[:anthropic_api_key] if config[:anthropic_api_key]
+            c.gemini_api_key = config[:gemini_api_key] if config[:gemini_api_key]
           end
-        end
-
-        def compact_if_needed!
-          # Placeholder for auto-compaction when token count exceeds threshold
-        end
-
-        def extract_tool_uses(response)
-          return [] unless response.is_a?(Hash) || response.respond_to?(:content_blocks)
-
-          blocks = if response.respond_to?(:content_blocks)
-                     response.content_blocks
-                   elsif response.is_a?(Hash)
-                     response[:content_blocks] || response["content_blocks"] || []
-                   else
-                     []
-                   end
-
-          blocks.select { |b| block_type(b) == "tool_use" }
-                .map { |b| extract_tool_use_info(b) }
-        end
-
-        def block_type(block)
-          if block.respond_to?(:type)
-            block.type
-          elsif block.is_a?(Hash)
-            block[:type] || block["type"]
-          end
-        end
-
-        def extract_tool_use_info(block)
-          content = if block.respond_to?(:content)
-                      block.content
-                    elsif block.is_a?(Hash)
-                      block[:content] || block["content"] || {}
-                    else
-                      {}
-                    end
-
-          {
-            id: content[:id] || content["id"] || "",
-            name: content[:name] || content["name"] || "",
-            input: content[:input] || content["input"] || {}
-          }
-        end
-
-        def append_assistant_response(response)
-          blocks = if response.respond_to?(:content_blocks)
-                     response.content_blocks
-                   elsif response.is_a?(Hash)
-                     (response[:content_blocks] || response["content_blocks"] || []).map do |b|
-                       Models::ContentBlock.new(type: b[:type] || b["type"], content: b[:content] || b["content"] || {})
-                     end
-                   else
-                     [Models::ContentBlock.new(type: "text", content: { text: response.to_s })]
-                   end
-
-          @messages << Models::ConversationMessage.new(role: "assistant", content_blocks: blocks)
-        end
-
-        def append_tool_results(tool_uses, results)
-          blocks = tool_uses.zip(results).map do |tu, result|
-            Models::ContentBlock.new(
-              type: "tool_result",
-              content: {
-                tool_use_id: tu[:id],
-                text: result.text,
-                is_error: result.is_error
-              }
-            )
-          end
-
-          @messages << Models::ConversationMessage.new(role: "user", content_blocks: blocks)
-        end
-
-        def build_tool_context
-          Models::ToolExecutionContext.new(
-            cwd: @context.cwd,
-            session_id: "default",
-            event_emitter: nil
-          )
         end
       end
     end

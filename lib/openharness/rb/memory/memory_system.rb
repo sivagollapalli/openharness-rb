@@ -8,7 +8,7 @@ module Openharness
       class MemorySystem
         INDEX_FILE = "MEMORY.md"
 
-        def initialize(project_dir:)
+        def initialize(project_dir: Dir.pwd)
           @memory_dir = get_project_memory_dir(project_dir)
           @tokenizer = Tokenizer.new
         end
@@ -38,6 +38,7 @@ module Openharness
 
         def load_memory_prompt
           index_path = File.join(@memory_dir, INDEX_FILE)
+          puts "Memory is loading from #{index_path}...."
           index = File.exist?(index_path) ? File.read(index_path) : ""
           memories = scan_memory_files.first(10).map { |h| "- #{h.name}: #{h.description}" }
           "## Memory\n\n#{index}\n\n### Available Memories\n#{memories.join("\n")}"

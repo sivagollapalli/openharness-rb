@@ -8,10 +8,10 @@ module Openharness
   module Rb
     module Hooks
       class HookExecutor
-        def initialize(registry:, http_client: nil, llm_adapter: nil)
+        def initialize(registry:, http_client: nil, query_engine: nil)
           @registry = registry
           @http = http_client || Faraday.new
-          @llm = llm_adapter
+          @query_engine = query_engine
         end
 
         def dispatch(event, payload:, context_name: nil)
@@ -63,9 +63,7 @@ module Openharness
 
         def execute_prompt(hook, payload)
           prompt_text = hook.prompt_template.gsub("{{payload}}", JSON.generate(payload))
-          response = @llm.stream_messages([
-            { role: "user", content: prompt_text }
-          ])
+          response = @query_engine.ask(prompt_text)
           result = JSON.parse(response.content)
           result["ok"] ? { ok: true } : { ok: false, error: result["reason"] }
         rescue StandardError => e

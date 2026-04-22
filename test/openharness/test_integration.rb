@@ -4,105 +4,87 @@ require "test_helper"
 
 module Openharness
   module Rb
-    # Stub API adapter that simulates: tool_use response → final text response
-    class MockLlmAdapter
-      attr_reader :calls
+    # A simple RubyLLM::Tool for integration testing
+    class IntegrationEchoTool < RubyLLM::Tool
+      description "Echoes input text back"
 
-      def initialize
-        @calls = []
-        @call_index = 0
-      end
+      param :text, desc: "Text to echo"
 
-      def stream_messages(messages, tools: [], &block)
-        @calls << { messages: messages.dup, tools: tools }
-        @call_index += 1
-
-        if @call_index == 1
-          # First call: return a tool_use block
-          tool_use_response = {
-            content_blocks: [
-              Models::ContentBlock.new(
-                type: "tool_use",
-                content: { id: "call_1", name: "echo_tool", input: { text: "hello world" } }
-              )
-            ]
-          }
-          tool_use_response
-        else
-          # Subsequent calls: return final text
-          {
-            content_blocks: [
-              Models::ContentBlock.new(
-                type: "text",
-                content: { text: "The echo tool returned: hello world" }
-              )
-            ]
-          }
-        end
+      def execute(text:)
+        "Echo: #{text}"
       end
     end
 
-    # A simple tool for integration testing
-    class EchoTool < Tools::BaseTool
-      def name = "echo_tool"
-      def description = "Echoes input text"
-      def input_schema = { type: "object", properties: { text: { type: "string" } }, required: ["text"] }
-
-      def execute(input, _context)
-        Models::ToolResult.new(text: "Echo: #{input[:text] || input['text']}")
-      end
-    end
-
-    class TestIntegrationFullQueryCycle < Minitest::Test
-      def test_full_query_cycle_with_mocked_llm
-        # Setup components
-        mock_api = MockLlmAdapter.new
-        tool_registry = Tools::ToolRegistry.new
-        tool_registry.register(EchoTool.new)
-
-        permission_checker = Permissions::PermissionChecker.new(
-          mode: Permissions::PermissionMode::FULL_AUTO
-        )
-
-        context = Models::QueryContext.new(max_turns: 10)
-
+    class TestIntegrationQueryEngine < Minitest::Test
+      def test_query_engine_initializes_with_tools_and_system_prompt
         engine = Engine::QueryEngine.new(
-          api_adapter: mock_api,
-          tool_registry: tool_registry,
-          permission_checker: permission_checker,
-          context: context
+          model: "gpt-4o",
+          tools: [IntegrationEchoTool],
+          system_prompt: "You are a helpful assistant.",
+          provider_config: { openai_api_key: "sk-test" }
         )
 
-        # Collect events
-        events = []
-        engine.run_query("Please echo hello world") { |e| events << e }
+        # Verify chat was created with tools
+        assert_equal 1, engine.chat.tools.length
+        assert_equal "integration_echo_tool", engine.chat.tools.first.name
 
-        # Verify: API was called twice (tool_use → final answer)
-        assert_equal 2, mock_api.calls.length
+        # Verify cost tracker starts at zero
+        assert_equal 0, engine.cost_tracker.input_tokens
+        assert_equal 0, engine.cost_tracker.output_tokens
+      end
 
-        # Verify: tool was executed
-        tool_started = events.select { |e| e.is_a?(Models::ToolExecutionStarted) }
-        assert_equal 1, tool_started.length
-        assert_equal "echo_tool", tool_started.first.tool_name
+      def test_query_engine_clear_resets_conversation
+        engine = Engine::QueryEngine.new(
+          model: "gpt-4o",
+          tools: [IntegrationEchoTool],
+          system_prompt: "You are helpful.",
+          provider_config: { openai_api_key: "sk-test" }
+        )
 
-        tool_completed = events.select { |e| e.is_a?(Models::ToolExecutionCompleted) }
-        assert_equal 1, tool_completed.length
-        assert_equal "Echo: hello world", tool_completed.first.result.text
+        engine.clear!
 
-        # Verify: turn complete event emitted
-        turn_complete = events.select { |e| e.is_a?(Models::AssistantTurnComplete) }
-        assert_equal 1, turn_complete.length
-        assert_equal "end_turn", turn_complete.first.stop_reason
+        # After clear, tools should still be registered
+        assert_equal 1, engine.chat.tools.length
+      end
 
-        # Verify: conversation history has correct structure
-        # user message → assistant (tool_use) → user (tool_result) → assistant (final)
-        assert_equal 4, engine.messages.length
-        assert_equal "user", engine.messages[0].role
-        assert_equal "assistant", engine.messages[1].role
-        assert_equal "user", engine.messages[2].role
-        assert_equal "tool_result", engine.messages[2].content_blocks[0].type
-        assert_equal "assistant", engine.messages[3].role
-        assert_equal "text", engine.messages[3].content_blocks[0].type
+      def test_query_engine_add_tool_at_runtime
+        engine = Engine::QueryEngine.new(
+          model: "gpt-4o",
+          provider_config: { openai_api_key: "sk-test" }
+        )
+
+        assert_equal 0, engine.chat.tools.length
+
+        engine.add_tool(IntegrationEchoTool)
+        assert_equal 1, engine.chat.tools.length
+      end
+
+      def test_harness_wires_query_engine_with_default_tools
+        harness = Harness.new(api_key: "sk-test", model: "gpt-4o")
+
+        # Should have all 11 default tools
+        assert_equal 11, harness.query_engine.chat.tools.length
+
+        # Cost tracker accessible through harness
+        assert_equal 0, harness.cost_tracker.input_tokens
+      end
+
+      def test_harness_add_tool
+        harness = Harness.new(api_key: "sk-test", model: "gpt-4o")
+        initial_count = harness.query_engine.chat.tools.length
+
+        harness.add_tool(IntegrationEchoTool)
+        assert_equal initial_count + 1, harness.query_engine.chat.tools.length
+      end
+
+      def test_harness_clear
+        harness = Harness.new(api_key: "sk-test", model: "gpt-4o")
+        tool_count = harness.query_engine.chat.tools.length
+
+        harness.clear!
+
+        # Tools should be preserved after clear
+        assert_equal tool_count, harness.query_engine.chat.tools.length
       end
     end
   end

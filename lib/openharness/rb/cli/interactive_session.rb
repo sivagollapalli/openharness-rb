@@ -76,11 +76,14 @@ module Openharness
         end
 
         def cmd_clear(*)
+          @harness.clear!
           @output.puts "Conversation history cleared."
         end
 
         def cmd_cost(*)
-          @output.puts "Cost tracking: use RubyLLM's built-in usage tracking."
+          summary = @harness.cost_tracker.summary
+          @output.puts "Tokens — input: #{summary[:input_tokens]}, output: #{summary[:output_tokens]}"
+          @output.puts "Total cost: $#{'%.4f' % summary[:total_cost]}"
         end
 
         def cmd_exit(*)

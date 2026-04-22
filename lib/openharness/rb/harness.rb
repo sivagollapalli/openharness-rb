@@ -3,46 +3,65 @@
 module Openharness
   module Rb
     class Harness
-      attr_reader :settings, :api_adapter, :tools, :permission_checker, :hook_executor
+      attr_reader :settings, :query_engine, :permission_checker, :hook_executor
 
       def initialize(settings: nil, **overrides)
         @settings = settings || Config::Settings.new(**overrides)
-        @api_adapter = build_api_adapter
-        @tools = default_tools
         @permission_checker = build_permission_checker
         @hook_executor = build_hook_executor
+        @query_engine = build_query_engine
       end
 
-      # Run a query with all registered tools.
-      # Yields StreamEvent instances for real-time UI updates.
+      # Ask a question. Streams events via block.
       # Returns the final RubyLLM::Message.
       def query(message, &event_handler)
-        ENV["OPENHARNESS_CWD"] = @settings.respond_to?(:cwd) ? @settings.cwd : Dir.pwd
-        @api_adapter.ask(message, tools: @tools, &event_handler)
+        ENV["OPENHARNESS_CWD"] ||= Dir.pwd
+        @query_engine.ask(message, &event_handler)
       end
 
-      # Add a RubyLLM::Tool class or instance to the tool list.
+      # Add a RubyLLM::Tool class or instance at runtime.
       def add_tool(tool)
-        @tools << tool
+        @query_engine.add_tool(tool)
       end
 
-      # Replace all tools.
-      def set_tools(*tool_list)
-        @tools = tool_list.flatten
+      # Reset conversation history.
+      def clear!
+        @query_engine.clear!
+      end
+
+      # Cost tracker from the engine.
+      def cost_tracker
+        @query_engine.cost_tracker
       end
 
       private
 
-      def build_api_adapter
-        provider_config = {}
-        if @settings.api_key
-          provider_config[:openai_api_key] = @settings.api_key
-          provider_config[:anthropic_api_key] = @settings.api_key
-          provider_config[:gemini_api_key] = @settings.api_key
-        end
-        Api::LlmAdapter.new(
+      def build_query_engine
+        Engine::QueryEngine.new(
           model: @settings.model,
-          provider_config: provider_config.empty? ? nil : provider_config
+          tools: default_tools,
+          system_prompt_builder: build_system_prompt_builder,
+          provider_config: build_provider_config
+        )
+      end
+
+      def build_provider_config
+        return nil unless @settings.api_key
+
+        {
+          openai_api_key: @settings.api_key,
+          anthropic_api_key: @settings.api_key,
+          gemini_api_key: @settings.api_key
+        }
+      end
+
+      def build_system_prompt_builder
+        memory = Memory::MemorySystem.new
+        
+        Engine::SystemPromptBuilder.new(
+          skill_registry: nil,
+          memory_system: memory,
+          project_root: Dir.pwd
         )
       end
 
@@ -76,7 +95,7 @@ module Openharness
 
       def build_hook_executor
         registry = Hooks::HookRegistry.new
-        Hooks::HookExecutor.new(registry: registry, llm_adapter: @api_adapter)
+        Hooks::HookExecutor.new(registry: registry)
       end
     end
   end

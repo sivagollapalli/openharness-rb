@@ -119,45 +119,40 @@ Settings also support JSON files. All fields have sensible defaults.
 
 ### Assembling Components Manually
 
-For full control, wire the components yourself:
+For full control, wire the `QueryEngine` yourself:
 
 ```ruby
 require "openharness/rb"
 
-# API adapter (uses RubyLLM under the hood)
-api = Openharness::Rb::Api::LlmAdapter.new(
+# QueryEngine uses RubyLLM directly — pass model, tools, and API keys
+engine = Openharness::Rb::Engine::QueryEngine.new(
   model: "gpt-4o",
+  tools: [
+    Openharness::Rb::Tools::Builtin::ReadFileTool,
+    Openharness::Rb::Tools::Builtin::BashTool,
+    Openharness::Rb::Tools::Builtin::GrepTool,
+    Openharness::Rb::Tools::Builtin::GlobTool,
+  ],
   provider_config: { openai_api_key: "sk-your-key" }
 )
 
-# Tool registry with built-in tools
-tools = Openharness::Rb::Tools::ToolRegistry.new
-tools.register(Openharness::Rb::Tools::Builtin::ReadFileTool.new)
-tools.register(Openharness::Rb::Tools::Builtin::WriteToFileTool.new)
-tools.register(Openharness::Rb::Tools::Builtin::BashTool.new)
-tools.register(Openharness::Rb::Tools::Builtin::GrepTool.new)
-tools.register(Openharness::Rb::Tools::Builtin::GlobTool.new)
-
-# Permissions
-perms = Openharness::Rb::Permissions::PermissionChecker.new(
-  mode: Openharness::Rb::Permissions::PermissionMode::DEFAULT,
-  denied_commands: ["rm -rf /", /curl.*\|.*sh/]
-)
-
-# Query context
-context = Openharness::Rb::Models::QueryContext.new(max_turns: 10)
-
-# Query engine
-engine = Openharness::Rb::Engine::QueryEngine.new(
-  api_adapter: api,
-  tool_registry: tools,
-  permission_checker: perms,
-  context: context
-)
-
-engine.run_query("What Ruby files are in this project?") do |event|
-  print event.text if event.is_a?(Openharness::Rb::Models::AssistantTextDelta)
+# Ask a question — RubyLLM handles the tool-calling loop automatically
+engine.ask("What Ruby files are in this project?") do |event|
+  case event
+  when Openharness::Rb::Models::AssistantTextDelta
+    print event.text
+  when Openharness::Rb::Models::ToolExecutionStarted
+    puts "\n[Executing #{event.tool_name}...]"
+  when Openharness::Rb::Models::AssistantTurnComplete
+    puts "\n[Done]"
+  end
 end
+
+# Reset conversation
+engine.clear!
+
+# Add tools at runtime
+engine.add_tool(MyCustomTool)
 ```
 
 ## Custom Tools
@@ -397,7 +392,7 @@ plugins = loader.load_all
 Openharness::Rb
 ├── Models/          # ConversationMessage, StreamEvents, ToolResult, QueryContext
 ├── Engine/          # QueryEngine, CostTracker, SystemPromptBuilder
-├── Api/             # LlmAdapter (RubyLLM), ProviderRegistry, RetryHandler
+├── Api/             # ProviderRegistry, RetryHandler
 ├── Tools/           # BaseTool, ToolRegistry, 16 built-in tools
 ├── Permissions/     # PermissionChecker, PathRule, 3 permission modes
 ├── Hooks/           # HookExecutor, HookRegistry, Command/HTTP/Prompt hooks

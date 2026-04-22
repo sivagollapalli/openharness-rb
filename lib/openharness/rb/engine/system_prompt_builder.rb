@@ -1,15 +1,12 @@
 # frozen_string_literal: true
 
-require "json"
-
 module Openharness
   module Rb
     module Engine
       class SystemPromptBuilder
         PROJECT_CONTEXT_FILES = ["CLAUDE.md", ".openharness/context.md"].freeze
 
-        def initialize(tool_registry:, skill_registry: nil, memory_system: nil, project_root: Dir.pwd)
-          @tools = tool_registry
+        def initialize(skill_registry: nil, memory_system: nil, project_root: Dir.pwd)
           @skills = skill_registry
           @memory = memory_system
           @project_root = project_root
@@ -17,7 +14,6 @@ module Openharness
 
         def build
           sections = []
-          sections << build_tool_section
           sections << build_skill_section if @skills
           sections << build_memory_section if @memory
           sections << build_project_context
@@ -26,16 +22,11 @@ module Openharness
 
         private
 
-        def build_tool_section
-          schemas = @tools.schemas
-          "## Available Tools\n\n#{JSON.pretty_generate(schemas)}"
-        end
-
         def build_skill_section
           names = @skills.available_names
           return nil if names.empty?
 
-          "## Available Skills\n\n#{names.map { |n| "- #{n}" }.join("\n")}"
+          "## Available Skills\n\nUse the skill tool to load any of these:\n#{names.map { |n| "- #{n}" }.join("\n")}"
         end
 
         def build_memory_section

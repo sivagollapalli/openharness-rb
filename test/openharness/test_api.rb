@@ -198,17 +198,14 @@ module Openharness
         end
       end
 
-      class TestLlmAdapterConfiguration < Minitest::Test
+      class TestQueryEngineConfiguration < Minitest::Test
         # **Validates: Requirements 7.1**
-        # Test that creating LlmAdapter with provider_config calls RubyLLM.configure
+        # Test that creating QueryEngine with provider_config calls RubyLLM.configure
 
         def test_configure_passes_openai_key
-          configured = {}
-
-          # Stub RubyLLM.configure to capture what keys are set
           config_obj = Struct.new(:openai_api_key, :anthropic_api_key, :gemini_api_key).new
           RubyLLM.stub(:configure, proc { |&block| block.call(config_obj) }) do
-            LlmAdapter.new(provider_config: { openai_api_key: "sk-test-key-123" })
+            Engine::QueryEngine.new(model: "gpt-4o", provider_config: { openai_api_key: "sk-test-key-123" })
           end
 
           assert_equal "sk-test-key-123", config_obj.openai_api_key
@@ -219,7 +216,7 @@ module Openharness
         def test_configure_passes_anthropic_key
           config_obj = Struct.new(:openai_api_key, :anthropic_api_key, :gemini_api_key).new
           RubyLLM.stub(:configure, proc { |&block| block.call(config_obj) }) do
-            LlmAdapter.new(provider_config: { anthropic_api_key: "sk-ant-test-456" })
+            Engine::QueryEngine.new(model: "gpt-4o", provider_config: { anthropic_api_key: "sk-ant-test-456" })
           end
 
           assert_nil config_obj.openai_api_key
@@ -230,7 +227,7 @@ module Openharness
         def test_configure_passes_gemini_key
           config_obj = Struct.new(:openai_api_key, :anthropic_api_key, :gemini_api_key).new
           RubyLLM.stub(:configure, proc { |&block| block.call(config_obj) }) do
-            LlmAdapter.new(provider_config: { gemini_api_key: "AItest789" })
+            Engine::QueryEngine.new(model: "gpt-4o", provider_config: { gemini_api_key: "AItest789" })
           end
 
           assert_nil config_obj.openai_api_key
@@ -241,7 +238,7 @@ module Openharness
         def test_configure_passes_multiple_keys
           config_obj = Struct.new(:openai_api_key, :anthropic_api_key, :gemini_api_key).new
           RubyLLM.stub(:configure, proc { |&block| block.call(config_obj) }) do
-            LlmAdapter.new(provider_config: {
+            Engine::QueryEngine.new(model: "gpt-4o", provider_config: {
               openai_api_key: "sk-openai",
               anthropic_api_key: "sk-ant-anthropic",
               gemini_api_key: "AIgemini",
@@ -256,7 +253,7 @@ module Openharness
         def test_no_config_does_not_call_configure
           configure_called = false
           RubyLLM.stub(:configure, proc { configure_called = true }) do
-            LlmAdapter.new(model: "gpt-4o")
+            Engine::QueryEngine.new(model: "gpt-4o")
           end
 
           refute configure_called, "RubyLLM.configure should not be called without provider_config"
