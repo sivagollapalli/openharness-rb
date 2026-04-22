@@ -10,6 +10,7 @@ module Openharness
           "openai" => { prefix: "sk-", default_model: "gpt-4o" },
           "anthropic" => { prefix: "sk-ant-", default_model: "claude-sonnet-4-20250514" },
           "gemini" => { prefix: "AI", default_model: "gemini-2.0-flash" },
+          "openroute" => { prefix: "sk-or-v1", default_model: "openai/gpt-oss-120b" }
         }.freeze
 
         def initialize

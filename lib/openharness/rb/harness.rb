@@ -54,7 +54,8 @@ module Openharness
         {
           openai_api_key: @settings.api_key,
           anthropic_api_key: @settings.api_key,
-          gemini_api_key: @settings.api_key
+          gemini_api_key: @settings.api_key,
+          openrouter_api_key: @settings.api_key
         }
       end
 

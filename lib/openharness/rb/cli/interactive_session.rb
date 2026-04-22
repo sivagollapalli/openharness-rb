@@ -13,6 +13,15 @@ module Openharness
           "/exit" => :cmd_exit
         }.freeze
 
+        # ANSI color codes for terminal output
+        DIM = "\e[2m"
+        CYAN = "\e[36m"
+        YELLOW = "\e[33m"
+        GREEN = "\e[32m"
+        RED = "\e[31m"
+        BOLD = "\e[1m"
+        RESET = "\e[0m"
+
         def initialize(settings:, input: $stdin, output: $stdout)
           @settings = settings
           @input = input
@@ -21,10 +30,10 @@ module Openharness
         end
 
         def run
-          @output.puts "OpenHarness interactive session. Type /help for commands."
+          @output.puts "#{BOLD}OpenHarness#{RESET} interactive session. Type /help for commands.\n\n"
           catch(:exit) do
             loop do
-              @output.print "> "
+              @output.print "#{GREEN}> #{RESET}"
               line = @input.gets
               break if line.nil?
 
@@ -91,20 +100,65 @@ module Openharness
         end
 
         def process_query(message)
+          @output.puts ""
+          @in_thinking = false
+
           @harness.query(message) do |event|
             case event
+
+            when Models::TurnStarted
+              @output.puts "#{DIM}─── Turn #{event.turn_number}/#{event.max_turns} ───#{RESET}"
+              @in_thinking = true
+
             when Models::AssistantTextDelta
+              if @in_thinking
+                # First text after turn start — this is the agent's thinking
+                @output.print "#{DIM}💭 #{RESET}"
+                @in_thinking = false
+              end
               @output.print event.text
+
             when Models::ToolExecutionStarted
-              @output.puts "\n[Executing #{event.tool_name}...]"
+              @in_thinking = false
+              @output.puts "" # newline after any thinking text
+              @output.puts "#{YELLOW}⚡ Calling #{BOLD}#{event.tool_name}#{RESET}"
+
             when Models::ToolExecutionCompleted
-              @output.puts "[Tool done]"
+              result_text = event.result.text
+              # Truncate long outputs for display
+              display = if result_text.length > 500
+                          result_text[0..497] + "..."
+                        else
+                          result_text
+                        end
+
+              if event.result.is_error
+                @output.puts "#{RED}   ✗ Error: #{display}#{RESET}"
+              else
+                # Show output indented, dimmed for readability
+                display.lines.first(10).each do |line|
+                  @output.puts "#{DIM}   │ #{line.rstrip}#{RESET}"
+                end
+                if result_text.lines.count > 10
+                  @output.puts "#{DIM}   │ ... (#{result_text.lines.count - 10} more lines)#{RESET}"
+                end
+              end
+              @output.puts ""
+
             when Models::AssistantTurnComplete
               @output.puts ""
+              summary = @harness.cost_tracker.summary
+              @output.puts "#{DIM}─── Done (#{summary[:input_tokens]} in / #{summary[:output_tokens]} out tokens) ───#{RESET}"
+              @output.puts ""
+
+            when Models::ErrorOccurred
+              @output.puts "#{RED}⚠ #{event.error}#{RESET}"
             end
           end
+        rescue MaxTurnsExceeded
+          @output.puts "\n#{RED}⚠ Max turns (#{@harness.query_engine.max_turns}) exceeded#{RESET}\n"
         rescue StandardError => e
-          @output.puts "\n[Error: #{e.message}]"
+          @output.puts "\n#{RED}⚠ Error: #{e.message}#{RESET}\n"
         end
       end
     end

@@ -13,6 +13,11 @@ module Openharness
         attribute :text, Types::String
       end
 
+      class TurnStarted < StreamEvent
+        attribute :turn_number, Types::Integer
+        attribute :max_turns, Types::Integer
+      end
+
       class ToolExecutionStarted < StreamEvent
         attribute :tool_name, Types::String
         attribute :tool_use_id, Types::String

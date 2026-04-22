@@ -134,6 +134,12 @@ module Openharness
             raise MaxTurnsExceeded, "Exceeded max turns (#{@max_turns})"
           end
 
+          # Emit turn start so the UI can show progress
+          event_handler&.call(Models::TurnStarted.new(
+            turn_number: @turn_count,
+            max_turns: @max_turns
+          ))
+
           @tool_called_this_turn = false
           setup_callbacks(event_handler)
 
@@ -253,6 +259,7 @@ module Openharness
             c.openai_api_key = config[:openai_api_key] if config[:openai_api_key]
             c.anthropic_api_key = config[:anthropic_api_key] if config[:anthropic_api_key]
             c.gemini_api_key = config[:gemini_api_key] if config[:gemini_api_key]
+            c.openrouter_api_key = config[:openrouter_api_key] if config[:openrouter_api_key]
           end
         end
       end
