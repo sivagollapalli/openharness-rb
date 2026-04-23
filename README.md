@@ -269,30 +269,224 @@ The registry supports hot-reload via file watching with `start_watching!`.
 
 ## Skills
 
-Skills are markdown files loaded on-demand into the LLM context:
+Skills are domain-knowledge documents that the agent can load on demand. They live as markdown files in your project and are lazy-loaded — only the catalog (name + description) is included in the system prompt, and the full content is fetched when the agent calls the built-in `skill` tool.
+
+### Directory Layout
+
+```
+your-project/
+└── .openharness/
+    ├── skills.yml              # Skill catalog (name → description + file)
+    └── skills/
+        ├── ruby-on-rails.md    # Skill content files
+        └── gin-golang.md
+```
+
+### Defining the Catalog (`skills.yml`)
+
+`skills.yml` lists every skill the agent can see. Each entry has a name, description, and the filename in the `skills/` directory:
+
+```yaml
+# .openharness/skills.yml
+skills:
+  ruby-on-rails:
+    description: "Complete guide to Ruby on Rails — project setup, folder structure, commands"
+    file: "ruby-on-rails.md"
+
+  gin-golang:
+    description: "Guide to building web apps with Gin in Go — project structure, commands"
+    file: "gin-golang.md"
+```
+
+The agent sees these descriptions in the system prompt and decides which skill to load based on the task.
+
+### Writing a Skill File
+
+Each skill is a markdown file in `.openharness/skills/`. Add optional YAML frontmatter for metadata:
 
 ```markdown
-<!-- ~/.openharness/skills/ruby-testing.md -->
 ---
-name: ruby-testing
-description: Best practices for testing Ruby applications
+name: ruby-on-rails
+description: Complete guide to Ruby on Rails — project setup, folder structure, commands
 ---
-## Ruby Testing Guide
 
-Use Minitest or RSpec. Always write tests first...
+## Creating a New Rails Project
+
+```bash
+rails new myapp --database=postgresql
 ```
+
+## Folder Structure
+...
+```
+
+Frontmatter fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | No | Display name (defaults to filename without `.md`) |
+| `description` | No | Short summary shown in the catalog |
+
+Files without frontmatter are also valid — the first heading line is used as the name and the first non-empty line after it as the description.
+
+### Auto-Discovery
+
+Any `.md` file in `.openharness/skills/` that isn't listed in `skills.yml` is automatically discovered and added to the catalog. The registry parses just the frontmatter for the description, so you can skip the YAML catalog entirely if you prefer:
+
+```
+.openharness/skills/
+├── ruby-on-rails.md    # listed in skills.yml
+└── docker-basics.md    # not in skills.yml — auto-discovered
+```
+
+Both skills will appear in the agent's catalog.
+
+### How It Works
+
+1. On `Harness.new`, the `SkillRegistry` reads `.openharness/skills.yml` and scans the `skills/` directory.
+2. Only names and descriptions are loaded — no file content is read yet.
+3. The `SystemPromptBuilder` includes the catalog in the system prompt so the LLM knows what's available.
+4. When the agent decides it needs a skill, it calls the `skill` tool with the skill name.
+5. The `SkillTool` lazy-loads the full markdown content from disk, caches it, and returns it to the LLM.
+
+### Automatic Integration via Harness
+
+Just create the files — the `Harness` picks them up:
+
+```ruby
+harness = Openharness::Rb::Harness.new(
+  api_key: "sk-your-key",
+  model: "gpt-4o",
+  permission_mode: :full_auto
+)
+
+# The agent will automatically load the "ruby-on-rails" skill
+# when it encounters a Rails-related task.
+harness.query("Create a new Rails API app with user CRUD") do |event|
+  case event
+  when Openharness::Rb::Models::AssistantTextDelta
+    print event.text
+  when Openharness::Rb::Models::SkillLoaded
+    puts "[Skill loaded: #{event.skill_name}]"
+  end
+end
+```
+
+### Adding Skills at Runtime
+
+```ruby
+harness.add_skill(
+  name: "docker-basics",
+  description: "Docker containerization guide",
+  content: "## Docker\n\nUse multi-stage builds..."
+)
+```
+
+### Programmatic API
 
 ```ruby
 registry = Openharness::Rb::Skills::SkillRegistry.new
-registry.load_all  # loads from ~/.openharness/skills/ and bundled skills
+registry.load_all
 
-skill = registry.get("ruby-testing")
-puts skill.content
+# List available skills
+registry.catalog_entries
+# => [{ name: "ruby-on-rails", description: "...", loaded: false }, ...]
+
+# Load a skill (lazy — reads file on first access)
+skill = registry.get("ruby-on-rails")
+puts skill.name        # => "ruby-on-rails"
+puts skill.description # => "Complete guide to Ruby on Rails..."
+puts skill.content     # => full markdown content
 ```
+
+### CLI
+
+Inside an interactive session, use `/skill <name>` to load a skill into the conversation.
 
 ## Memory
 
-Cross-session memory stored as markdown files with weighted search:
+Memory gives the agent persistent, cross-session context about your project. Memory files are markdown documents stored in `.openharness/memory/` and are automatically injected into the system prompt every time you create a `Harness` instance — no extra wiring needed.
+
+### Directory Layout
+
+```
+your-project/
+└── .openharness/
+    └── memory/
+        ├── MEMORY.md          # Index file (always included first)
+        ├── architecture.md    # Any number of topic files
+        └── conventions.md
+```
+
+### Index File (`MEMORY.md`)
+
+`MEMORY.md` is a special file that is always loaded at the top of the memory prompt. Use it for high-level project facts the agent should always know:
+
+```markdown
+## Location
+My location is in India. Always show results with respective location
+
+## Stack
+- Ruby 3.3, Rails 7.1, PostgreSQL 16
+- Frontend: Hotwire + Tailwind CSS
+```
+
+### Topic Memory Files
+
+Additional `.md` files in the same directory are scanned and summarized for the agent. Add optional YAML frontmatter for richer metadata:
+
+```markdown
+---
+name: auth-flow
+description: How authentication and session management work
+type: architecture
+---
+
+## Authentication Flow
+
+1. User submits credentials to `/sessions`
+2. `SessionsController` calls `AuthService.authenticate`
+3. On success a signed JWT is stored in an HttpOnly cookie
+...
+```
+
+Frontmatter fields:
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | No | Display name (defaults to filename without `.md`) |
+| `description` | No | Short summary shown in the memory catalog |
+| `type` | No | Free-form category (e.g. `architecture`, `convention`, `decision`) |
+
+Files without frontmatter are still loaded — the filename is used as the name.
+
+### How It Works
+
+1. On `Harness.new`, the `MemorySystem` scans `.openharness/memory/` for all `.md` files (excluding `MEMORY.md`).
+2. The `SystemPromptBuilder` calls `load_memory_prompt`, which concatenates the index file content and a catalog of available memories.
+3. This combined text is appended to the agent's system prompt, so the LLM is aware of project context from the first turn.
+4. When the agent needs deeper detail, `find_relevant_memories(query)` performs token-based search with metadata weighted 2× over body content, returning the most relevant files.
+
+### Automatic Integration via Harness
+
+Just create the files — the `Harness` picks them up automatically:
+
+```ruby
+harness = Openharness::Rb::Harness.new(
+  api_key: "sk-your-key",
+  model: "gpt-4o"
+)
+
+# Memory is already loaded into the system prompt.
+# The agent knows your project context from the start.
+harness.query("Explain our auth flow") do |event|
+  print event.text if event.is_a?(Openharness::Rb::Models::AssistantTextDelta)
+end
+```
+
+### Programmatic API
+
+For lower-level access:
 
 ```ruby
 memory = Openharness::Rb::Memory::MemorySystem.new(project_dir: Dir.pwd)
@@ -303,11 +497,13 @@ headers = memory.scan_memory_files
 # Find relevant memories for a query (metadata weighted 2x over body)
 results = memory.find_relevant_memories("authentication flow")
 
-# Generate a prompt section for the LLM
+# Generate the prompt section that gets injected into the system prompt
 prompt = memory.load_memory_prompt
 ```
 
-Memory files live in `.openharness/memory/` with an optional `MEMORY.md` index.
+### CLI
+
+Inside an interactive session, use the `/memory` slash command to display the current memory index.
 
 ## MCP Integration
 

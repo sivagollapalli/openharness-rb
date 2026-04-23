@@ -4,7 +4,7 @@ module Openharness
   module Rb
     class Harness
       attr_reader :settings, :query_engine, :permission_checker, :hook_executor,
-                  :mcp_manager, :skill_registry
+                  :mcp_manager, :skill_registry, :memory
 
       def initialize(settings: nil, input: $stdin, output: $stdout, **overrides)
         @settings = settings || Config::Settings.new(**overrides)
@@ -14,6 +14,7 @@ module Openharness
         @hook_executor = build_hook_executor
         @mcp_manager = build_mcp_manager
         @skill_registry = build_skill_registry
+        @memory = build_memory_system
         @query_engine = build_query_engine
         print_loaded_skills
       end
@@ -82,7 +83,7 @@ module Openharness
       def build_system_prompt_builder
         Engine::SystemPromptBuilder.new(
           skill_registry: @skill_registry,
-          memory_system: nil,
+          memory_system: @memory,
           project_root: Dir.pwd
         )
       end
@@ -144,6 +145,10 @@ module Openharness
 
       def build_mcp_manager
         Mcp::McpClientManager.new
+      end
+
+      def build_memory_system
+        Memory::MemorySystem.new
       end
 
       def print_loaded_skills
