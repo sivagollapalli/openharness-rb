@@ -153,7 +153,7 @@ module Openharness
         else
           @output.puts "\e[2m📚 Skills available (#{entries.length}):\e[0m"
           entries.each do |e|
-            @output.puts "\e[2m   • #{e[:name]} — #{e[:description]} #{e[:loaded]}\e[0m"
+            @output.puts "\e[2m   • #{e[:name]} — #{e[:description]}\e[0m"
           end
         end
       end

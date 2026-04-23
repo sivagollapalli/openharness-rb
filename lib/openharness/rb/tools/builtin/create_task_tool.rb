@@ -9,6 +9,8 @@ module Openharness
         class CreateTaskTool < RubyLLM::Tool
           description "Start a named background task that runs a shell command"
 
+          def name = "create_task"
+
           param :task_name, desc: "Unique name for the background task"
           param :command, desc: "Shell command to run"
 

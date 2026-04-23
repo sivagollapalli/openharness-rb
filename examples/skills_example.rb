@@ -25,7 +25,7 @@ harness = Openharness::Rb::Harness.new(
 in_thinking = false
 
 problem_statement = <<-STATEMENT
-  - Create new rails project name as harness-demo with rails version 8.1
+  - Create new golang project name as harness-demo with golang version
   - Added user and profile model. User has one profile
   - User has first_name, last_name, email attributes. All string attributes
   - profile has language, bio. All are string attributes
@@ -75,5 +75,8 @@ harness.query(problem_statement) do |event|
 
   when Openharness::Rb::Models::ErrorOccurred
     puts "#{RED}⚠ #{event.error}#{RESET}"
+
+  when Openharness::Rb::Models::SkillLoaded
+    puts "#{CYAN}📖 Skill loaded: #{BOLD}#{event.skill_name}#{RESET}#{CYAN} — #{event.description} (#{event.content_length} chars)#{RESET}"
   end
 end

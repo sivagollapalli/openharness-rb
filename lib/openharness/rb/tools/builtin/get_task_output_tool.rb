@@ -9,6 +9,8 @@ module Openharness
         class GetTaskOutputTool < RubyLLM::Tool
           description "Get the output of a running background task"
 
+          def name = "get_task_output"
+
           param :task_name, desc: "Name of the task to get output from"
 
           def initialize(task_manager)

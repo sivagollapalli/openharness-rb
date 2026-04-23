@@ -13,6 +13,8 @@ module Openharness
 
           description "Read or edit a cell in a Jupyter notebook (.ipynb) file"
 
+          def name = "notebook_edit"
+
           param :path, desc: "Notebook file path relative to working directory"
           param :cell_index, type: :integer, desc: "Index of the cell to read or edit (0-based)"
           param :new_content, desc: "New content for the cell (omit to read)", required: false

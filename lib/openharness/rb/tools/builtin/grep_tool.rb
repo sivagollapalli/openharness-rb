@@ -9,6 +9,8 @@ module Openharness
         class GrepTool < RubyLLM::Tool
           description "Search files matching a glob pattern for lines matching a regex pattern"
 
+          def name = "grep"
+
           param :pattern, desc: "Regex pattern to search for"
           param :glob, desc: "File glob pattern (e.g. '**/*.rb')"
 

@@ -9,6 +9,8 @@ module Openharness
         class AgentTool < RubyLLM::Tool
           description "Spawn a sub-agent to handle a delegated task"
 
+          def name = "agent"
+
           param :task_description, desc: "Description of the task to delegate"
           param :agent_name, desc: "Optional name of the agent to use", required: false
 

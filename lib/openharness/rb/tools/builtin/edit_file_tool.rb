@@ -12,6 +12,8 @@ module Openharness
 
           description "Apply a text replacement (old_str -> new_str) to a file. old_str must match exactly once."
 
+          def name = "edit_file"
+
           param :path, desc: "File path relative to working directory"
           param :old_str, desc: "Text to find and replace (must match exactly once)"
           param :new_str, desc: "Replacement text"

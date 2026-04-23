@@ -10,6 +10,8 @@ module Openharness
         class WebSearchTool < RubyLLM::Tool
           description "Search the web for information (placeholder — configure a search provider)"
 
+          def name = "web_search"
+
           param :query, desc: "Search query"
 
           def execute(query:)

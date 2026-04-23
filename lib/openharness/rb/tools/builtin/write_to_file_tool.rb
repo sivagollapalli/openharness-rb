@@ -13,6 +13,8 @@ module Openharness
 
           description "Write content to a file, creating parent directories as needed"
 
+          def name = "write_to_file"
+
           param :path, desc: "File path relative to working directory"
           param :content, desc: "Content to write to the file"
 

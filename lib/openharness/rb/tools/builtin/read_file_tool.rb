@@ -9,6 +9,8 @@ module Openharness
         class ReadFileTool < RubyLLM::Tool
           description "Read the contents of a file at a given path relative to the working directory"
 
+          def name = "read_file"
+
           param :path, desc: "File path relative to working directory"
 
           def execute(path:)

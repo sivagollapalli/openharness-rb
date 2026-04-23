@@ -14,6 +14,8 @@ module Openharness
 
           description "Execute a shell command in a subprocess with configurable timeout"
 
+          def name = "bash"
+
           param :command, desc: "Shell command to execute"
           param :timeout, type: :integer, desc: "Timeout in seconds (default: 120)", required: false
 

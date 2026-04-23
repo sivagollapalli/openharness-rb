@@ -9,6 +9,8 @@ module Openharness
         class LspTool < RubyLLM::Tool
           description "Interact with a Language Server Protocol server for diagnostics, definitions, and references"
 
+          def name = "lsp"
+
           param :action, desc: "LSP action: diagnostics, definition, or references"
           param :file, desc: "File path relative to working directory"
           param :line, type: :integer, desc: "Line number (0-based)", required: false

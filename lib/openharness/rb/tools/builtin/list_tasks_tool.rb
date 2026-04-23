@@ -9,6 +9,8 @@ module Openharness
         class ListTasksTool < RubyLLM::Tool
           description "List all active background tasks with their names and statuses"
 
+          def name = "list_tasks"
+
           def initialize(task_manager)
             @task_manager = task_manager
           end

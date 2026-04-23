@@ -60,7 +60,7 @@ module Openharness
 
         # Catalog entries with descriptions (for system prompt)
         def catalog_entries
-          @catalog.map { |name, info| { name: name, description: info[:description] } }
+          @catalog.map { |name, info| { name: name, description: info[:description], loaded: info[:loaded] } }
         end
 
         # Register a skill that's already fully loaded (e.g. from plugins or runtime)

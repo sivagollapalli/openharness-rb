@@ -10,6 +10,8 @@ module Openharness
         class WebFetchTool < RubyLLM::Tool
           description "Fetch the content of a web page at a given URL"
 
+          def name = "web_fetch"
+
           param :url, desc: "URL to fetch"
 
           def execute(url:)

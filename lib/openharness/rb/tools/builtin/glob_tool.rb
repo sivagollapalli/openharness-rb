@@ -9,6 +9,8 @@ module Openharness
         class GlobTool < RubyLLM::Tool
           description "List file paths matching a glob pattern relative to the working directory"
 
+          def name = "glob"
+
           param :pattern, desc: "Glob pattern (e.g. '**/*.rb', 'src/**/*.js')"
 
           def execute(pattern:)

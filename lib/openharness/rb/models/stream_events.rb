@@ -35,6 +35,12 @@ module Openharness
       class ErrorOccurred < StreamEvent
         attribute :error, Types::Any
       end
+
+      class SkillLoaded < StreamEvent
+        attribute :skill_name, Types::String
+        attribute :description, Types::String
+        attribute :content_length, Types::Integer
+      end
     end
   end
 end

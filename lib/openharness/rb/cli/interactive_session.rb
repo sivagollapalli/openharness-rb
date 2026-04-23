@@ -153,6 +153,9 @@ module Openharness
 
             when Models::ErrorOccurred
               @output.puts "#{RED}⚠ #{event.error}#{RESET}"
+
+            when Models::SkillLoaded
+              @output.puts "#{CYAN}📖 Skill loaded: #{BOLD}#{event.skill_name}#{RESET}#{CYAN} (#{event.content_length} chars)#{RESET}"
             end
           end
         rescue MaxTurnsExceeded

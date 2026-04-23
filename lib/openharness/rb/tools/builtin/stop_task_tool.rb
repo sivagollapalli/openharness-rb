@@ -9,6 +9,8 @@ module Openharness
         class StopTaskTool < RubyLLM::Tool
           description "Stop a running background task by name"
 
+          def name = "stop_task"
+
           param :task_name, desc: "Name of the task to stop"
 
           def initialize(task_manager)
