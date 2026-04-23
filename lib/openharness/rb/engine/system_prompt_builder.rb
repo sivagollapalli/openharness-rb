@@ -23,10 +23,13 @@ module Openharness
         private
 
         def build_skill_section
-          names = @skills.available_names
-          return nil if names.empty?
+          entries = @skills.catalog_entries
+          return nil if entries.empty?
 
-          "## Available Skills\n\nUse the skill tool to load any of these:\n#{names.map { |n| "- #{n}" }.join("\n")}"
+          lines = entries.map { |e| "- **#{e[:name]}**: #{e[:description]}" }
+          "## Available Skills\n\n" \
+          "Use the `skill` tool to load any of these when you need specialized knowledge:\n" \
+          "#{lines.join("\n")}"
         end
 
         def build_memory_section

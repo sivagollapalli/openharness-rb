@@ -3,7 +3,8 @@
 module Openharness
   module Rb
     class Harness
-      attr_reader :settings, :query_engine, :permission_checker, :hook_executor, :mcp_manager
+      attr_reader :settings, :query_engine, :permission_checker, :hook_executor,
+                  :mcp_manager, :skill_registry
 
       def initialize(settings: nil, input: $stdin, output: $stdout, **overrides)
         @settings = settings || Config::Settings.new(**overrides)
@@ -12,7 +13,9 @@ module Openharness
         @permission_checker = build_permission_checker
         @hook_executor = build_hook_executor
         @mcp_manager = build_mcp_manager
+        @skill_registry = build_skill_registry
         @query_engine = build_query_engine
+        print_loaded_skills
       end
 
       def query(message, &event_handler)
@@ -31,6 +34,13 @@ module Openharness
 
         client.tools.each { |t| @query_engine.add_tool(t) }
         client
+      end
+
+      # Add a skill at runtime.
+      def add_skill(name:, description:, content:)
+        skill = Skills::SkillDefinition.new(name: name, description: description, content: content)
+        @skill_registry.instance_variable_get(:@skills)[name] = skill
+        skill
       end
 
       def clear!
@@ -71,14 +81,20 @@ module Openharness
 
       def build_system_prompt_builder
         Engine::SystemPromptBuilder.new(
-          skill_registry: nil,
+          skill_registry: @skill_registry,
           memory_system: nil,
           project_root: Dir.pwd
         )
       end
 
+      def build_skill_registry
+        registry = Skills::SkillRegistry.new
+        registry.load_all
+        registry
+      end
+
       def default_tools
-        [
+        tools = [
           Tools::Builtin::ReadFileTool,
           Tools::Builtin::WriteToFileTool,
           Tools::Builtin::EditFileTool,
@@ -91,14 +107,17 @@ module Openharness
           Tools::Builtin::LspTool,
           Tools::Builtin::NotebookEditTool,
         ]
+
+        # Add SkillTool with the loaded registry so the LLM can load skills on demand
+        tools << Tools::Builtin::SkillTool.new(@skill_registry)
+
+        tools
       end
 
       # Connect MCP servers from settings and collect their tools.
       def mcp_tools
         return [] if @settings.mcp_servers.empty?
 
-        # Pass configs directly — McpClientManager handles both
-        # McpServerConfig structs and plain hashes
         @mcp_manager.connect_all(@settings.mcp_servers)
         @mcp_manager.tools
       rescue StandardError => e
@@ -125,6 +144,18 @@ module Openharness
 
       def build_mcp_manager
         Mcp::McpClientManager.new
+      end
+
+      def print_loaded_skills
+        entries = @skill_registry.catalog_entries
+        if entries.empty?
+          @output.puts "\e[2m📚 No skills available\e[0m"
+        else
+          @output.puts "\e[2m📚 Skills available (#{entries.length}):\e[0m"
+          entries.each do |e|
+            @output.puts "\e[2m   • #{e[:name]} — #{e[:description]} #{e[:loaded]}\e[0m"
+          end
+        end
       end
     end
   end

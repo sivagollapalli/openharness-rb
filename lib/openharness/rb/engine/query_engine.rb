@@ -40,6 +40,7 @@ module Openharness
           - If a tool returns a permission denied error, inform the user and do not retry that tool.
           - When the task is fully complete, respond with your final answer as plain text (no tool calls).
           - Be thorough but efficient. Don't repeat steps that already succeeded.
+          - Use skill_tool to load skills dynamically if it is not available.
         PROMPT
 
         def initialize(
