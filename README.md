@@ -311,29 +311,142 @@ Memory files live in `.openharness/memory/` with an optional `MEMORY.md` index.
 
 ## MCP Integration
 
-Connect to Model Context Protocol servers for external tools:
+OpenHarness integrates with [Model Context Protocol](https://modelcontextprotocol.io/) servers via the [ruby_llm-mcp](https://github.com/patvice/ruby_llm-mcp) gem. MCP tools are automatically discovered and added alongside built-in tools.
+
+### Via Harness Config (Recommended)
+
+Pass MCP servers when creating the harness. Tools are connected and registered automatically:
+
+```ruby
+harness = Openharness::Rb::Harness.new(
+  api_key: ENV["OPENAI_API_KEY"],
+  model: "gpt-4o",
+  mcp_servers: [
+    # Stdio transport — runs a local process
+    {
+      name: "filesystem",
+      transport: "stdio",
+      config: {
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-filesystem", Dir.pwd]
+      }
+    },
+    # Playwright browser automation
+    {
+      name: "playwright",
+      transport: "stdio",
+      config: {
+        command: "npx",
+        args: ["@playwright/mcp@latest"]
+      }
+    },
+    # HTTP/Streamable transport — connects to a remote server
+    {
+      name: "remote-api",
+      transport: "http",
+      config: {
+        url: "https://mcp.example.com/api"
+      }
+    }
+  ]
+)
+
+# MCP tools are now available alongside built-in tools
+harness.query("List files modified today") do |event|
+  print event.text if event.is_a?(Openharness::Rb::Models::AssistantTextDelta)
+end
+```
+
+### Adding MCP Servers at Runtime
+
+```ruby
+harness = Openharness::Rb::Harness.new(api_key: "sk-key", model: "gpt-4o")
+
+# Add a server after initialization — its tools are registered immediately
+harness.add_mcp_server(
+  name: "sqlite",
+  transport: "stdio",
+  config: { command: "mcp-server-sqlite", args: ["mydb.sqlite"] }
+)
+```
+
+### Using McpClientManager Directly
+
+For lower-level control:
 
 ```ruby
 manager = Openharness::Rb::Mcp::McpClientManager.new
 
-config = Openharness::Rb::Mcp::McpServerConfig.new(
-  name: "my-server",
+# Connect a server
+manager.connect(
+  name: "filesystem",
   transport: "stdio",
-  command: "/usr/bin/mcp-server",
-  args: ["--port", "3000"]
+  config: { command: "npx", args: ["-y", "@modelcontextprotocol/server-filesystem", Dir.pwd] }
 )
 
-manager.connect(config)
+# Get all tools (RubyLLM-compatible, pass directly to chat.with_tools)
+tools = manager.tools
 
-# MCP tools are wrapped as standard BaseTool instances
-adapter = Openharness::Rb::Mcp::McpToolAdapter.new(
-  server_name: "my-server",
-  tool_info: { name: "query_db", description: "Run a DB query", input_schema: {} },
-  client_manager: manager
+# Get resources from a specific server
+resources = manager.client("filesystem").resources
+
+# Check connection status
+manager.statuses  # => { "filesystem" => :connected }
+
+# Disconnect all
+manager.disconnect_all
+```
+
+### Config Formats
+
+Both formats work — nested `config:` (matching ruby_llm-mcp) or flat keys:
+
+```ruby
+# Format 1: Nested config (recommended)
+{ name: "fs", transport: "stdio", config: { command: "npx", args: ["..."] } }
+
+# Format 2: Flat keys
+{ name: "fs", transport: "stdio", command: "npx", args: ["..."] }
+
+# Format 3: McpServerConfig struct
+Openharness::Rb::Mcp::McpServerConfig.new(
+  name: "fs", transport: "stdio", command: "npx", args: ["..."]
 )
 ```
 
-Supports `stdio` and `http` transports.
+### Supported Transports
+
+| Transport | Config Key | Description |
+|-----------|-----------|-------------|
+| `stdio` | `command`, `args`, `env` | Spawns a local process |
+| `http` / `streamable` | `url`, `headers` | Connects to a remote HTTP server |
+| `sse` | `url`, `headers` | Server-Sent Events transport |
+
+### Settings File with MCP
+
+```yaml
+# config.yml
+api_key: sk-your-key
+model: gpt-4o
+mcp_servers:
+  - name: filesystem
+    transport: stdio
+    config:
+      command: npx
+      args: ["-y", "@modelcontextprotocol/server-filesystem", "."]
+  - name: github
+    transport: http
+    config:
+      url: https://mcp-github.example.com
+```
+
+### Error Handling
+
+Failed MCP connections log a warning and continue without those tools. The harness remains functional with its built-in tools:
+
+```
+MCP server 'broken-server' failed to connect: Connection refused
+```
 
 ## Multi-Agent Coordination
 
@@ -396,7 +509,7 @@ Openharness::Rb
 ├── Tools/           # BaseTool, ToolRegistry, 16 built-in tools
 ├── Permissions/     # PermissionChecker, PathRule, 3 permission modes
 ├── Hooks/           # HookExecutor, HookRegistry, Command/HTTP/Prompt hooks
-├── Mcp/             # McpClientManager, McpToolAdapter
+├── Mcp/             # McpClientManager (ruby_llm-mcp integration)
 ├── Skills/          # SkillDefinition, SkillRegistry
 ├── Plugins/         # PluginManifest, PluginLoader
 ├── Memory/          # MemorySystem, Tokenizer (ASCII + CJK)

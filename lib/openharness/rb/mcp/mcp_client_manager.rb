@@ -1,7 +1,6 @@
 # frozen_string_literal: true
 
 require_relative "../errors"
-require_relative "mcp_server_config"
 
 module Openharness
   module Rb
@@ -12,63 +11,149 @@ module Openharness
         ERROR = :error
       end
 
+      # Manages MCP server connections using the ruby_llm-mcp gem.
+      # Accepts config as either:
+      #   - McpServerConfig struct (flat: name, transport, command, args, url, etc.)
+      #   - Plain hash matching ruby_llm-mcp format (name, transport, config: { command:, args: })
       class McpClientManager
-        attr_reader :statuses
+        attr_reader :statuses, :clients
 
         def initialize
-          @connections = {}
+          @clients = {}
           @statuses = {}
         end
 
+        # Connect to an MCP server.
+        # config can be a McpServerConfig, or a plain Hash.
         def connect(config)
-          case config.transport
-          when "stdio" then connect_stdio(config)
-          when "http"  then connect_http(config)
-          end
-          @statuses[config.name] = McpConnectionStatus::CONNECTED
+          require "ruby_llm/mcp"
+
+          name, transport_type, client_config = normalize_config(config)
+
+          client = RubyLLM::MCP.client(
+            name: name,
+            transport_type: transport_type,
+            config: client_config
+          )
+
+          @clients[name] = client
+          @statuses[name] = McpConnectionStatus::CONNECTED
+          client
         rescue StandardError => e
-          @statuses[config.name] = McpConnectionStatus::ERROR
-          raise McpServerNotConnectedError, "#{config.name}: #{e.message}"
+          name ||= config.respond_to?(:name) ? config.name : config[:name]
+          @statuses[name] = McpConnectionStatus::ERROR
+          warn "MCP server '#{name}' failed to connect: #{e.message}"
+          nil
+        end
+
+        def connect_all(configs)
+          configs.each { |c| connect(c) }
+        end
+
+        # All RubyLLM-compatible tools from all connected servers.
+        def tools
+          @clients.values.flat_map do |client|
+            client.tools
+          rescue StandardError => e
+            warn "Failed to get tools from MCP client: #{e.message}"
+            []
+          end
+        end
+
+        def resources
+          @clients.values.flat_map do |client|
+            client.resources
+          rescue StandardError => e
+            warn "Failed to get resources from MCP client: #{e.message}"
+            []
+          end
+        end
+
+        def client(name)
+          @clients.fetch(name) do
+            raise McpServerNotConnectedError, "MCP server '#{name}' is not connected"
+          end
         end
 
         def disconnect_all
-          @connections.each_value do |conn|
-            conn.close if conn.respond_to?(:close)
+          @clients.each do |name, client|
+            client.stop if client.respond_to?(:stop)
+            @statuses[name] = McpConnectionStatus::DISCONNECTED
+          rescue StandardError => e
+            warn "Error disconnecting MCP server '#{name}': #{e.message}"
           end
-          @connections.clear
-          @statuses.transform_values! { McpConnectionStatus::DISCONNECTED }
+          @clients.clear
         end
 
-        def call_tool(server_name, tool_name, arguments)
-          conn = @connections.fetch(server_name) do
-            raise McpServerNotConnectedError, server_name
-          end
-          conn.call_tool(tool_name, arguments)
-        end
-
-        def list_resources
-          @connections.flat_map do |name, conn|
-            conn.list_resources.map { |r| [name, r] }
-          end
-        end
-
-        def read_resource(server_name, uri)
-          conn = @connections.fetch(server_name) do
-            raise McpServerNotConnectedError, server_name
-          end
-          conn.read_resource(uri)
+        def connected?
+          @statuses.values.any? { |s| s == McpConnectionStatus::CONNECTED }
         end
 
         private
 
-        def connect_stdio(config)
-          # Spawn process, establish JSON-RPC over stdin/stdout
-          # Placeholder for actual stdio transport implementation
+        # Normalize config into [name, transport_type, client_config] for RubyLLM::MCP.client
+        def normalize_config(config)
+          if config.is_a?(Hash)
+            normalize_hash_config(config)
+          else
+            normalize_struct_config(config)
+          end
         end
 
-        def connect_http(config)
-          # Establish HTTP streamable connection
-          # Placeholder for actual HTTP transport implementation
+        # Handle plain hash config — supports both formats:
+        #   { name: "x", transport: "stdio", command: "npx", args: [...] }
+        #   { name: "x", transport: "stdio", config: { command: "npx", args: [...] } }
+        def normalize_hash_config(hash)
+          h = hash.transform_keys(&:to_sym)
+          name = h[:name]
+          transport = resolve_transport(h[:transport]&.to_s || "stdio")
+
+          # If user passed a nested config: key, use it directly
+          if h[:config]
+            client_config = h[:config].transform_keys(&:to_sym)
+          elsif transport == :stdio
+            client_config = {
+              command: h[:command],
+              args: h[:args] || [],
+              env: h[:env] || {}
+            }.compact
+          else
+            client_config = {
+              url: h[:url],
+              headers: h[:headers] || {}
+            }.compact
+          end
+
+          [name, transport, client_config]
+        end
+
+        # Handle McpServerConfig struct
+        def normalize_struct_config(config)
+          name = config.name
+          transport = resolve_transport(config.transport)
+
+          client_config = if transport == :stdio
+                            {
+                              command: config.command,
+                              args: config.args,
+                              env: config.env
+                            }.compact
+                          else
+                            cfg = { url: config.url }
+                            cfg[:headers] = config.headers unless config.headers.empty?
+                            cfg
+                          end
+
+          [name, transport, client_config]
+        end
+
+        def resolve_transport(transport_str)
+          case transport_str.to_s
+          when "stdio" then :stdio
+          when "http", "streamable" then :streamable
+          when "sse" then :sse
+          else :stdio
+          end
         end
       end
     end

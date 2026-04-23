@@ -3,33 +3,40 @@
 module Openharness
   module Rb
     class Harness
-      attr_reader :settings, :query_engine, :permission_checker, :hook_executor
+      attr_reader :settings, :query_engine, :permission_checker, :hook_executor, :mcp_manager
 
-      def initialize(settings: nil, **overrides)
+      def initialize(settings: nil, input: $stdin, output: $stdout, **overrides)
         @settings = settings || Config::Settings.new(**overrides)
+        @input = input
+        @output = output
         @permission_checker = build_permission_checker
         @hook_executor = build_hook_executor
+        @mcp_manager = build_mcp_manager
         @query_engine = build_query_engine
       end
 
-      # Ask a question. Streams events via block.
-      # Returns the final RubyLLM::Message.
       def query(message, &event_handler)
         ENV["OPENHARNESS_CWD"] ||= Dir.pwd
         @query_engine.ask(message, &event_handler)
       end
 
-      # Add a RubyLLM::Tool class or instance at runtime.
       def add_tool(tool)
         @query_engine.add_tool(tool)
       end
 
-      # Reset conversation history.
+      # Connect an MCP server at runtime and add its tools to the engine.
+      def add_mcp_server(config)
+        client = @mcp_manager.connect(config)
+        return unless client
+
+        client.tools.each { |t| @query_engine.add_tool(t) }
+        client
+      end
+
       def clear!
         @query_engine.clear!
       end
 
-      # Cost tracker from the engine.
       def cost_tracker
         @query_engine.cost_tracker
       end
@@ -37,14 +44,17 @@ module Openharness
       private
 
       def build_query_engine
+        all_tools = default_tools + mcp_tools
         Engine::QueryEngine.new(
           model: @settings.model,
-          tools: default_tools,
+          tools: all_tools,
           system_prompt_builder: build_system_prompt_builder,
           provider_config: build_provider_config,
           max_turns: @settings.max_turns,
           permission_checker: @permission_checker,
-          hook_executor: @hook_executor
+          hook_executor: @hook_executor,
+          input: @input,
+          output: @output
         )
       end
 
@@ -60,11 +70,9 @@ module Openharness
       end
 
       def build_system_prompt_builder
-        memory = Memory::MemorySystem.new(  )
-
         Engine::SystemPromptBuilder.new(
           skill_registry: nil,
-          memory_system: memory,
+          memory_system: nil,
           project_root: Dir.pwd
         )
       end
@@ -85,6 +93,19 @@ module Openharness
         ]
       end
 
+      # Connect MCP servers from settings and collect their tools.
+      def mcp_tools
+        return [] if @settings.mcp_servers.empty?
+
+        # Pass configs directly — McpClientManager handles both
+        # McpServerConfig structs and plain hashes
+        @mcp_manager.connect_all(@settings.mcp_servers)
+        @mcp_manager.tools
+      rescue StandardError => e
+        warn "Failed to load MCP tools: #{e.message}"
+        []
+      end
+
       def build_permission_checker
         Permissions::PermissionChecker.new(
           mode: @settings.permission_mode,
@@ -100,6 +121,10 @@ module Openharness
       def build_hook_executor
         registry = Hooks::HookRegistry.new
         Hooks::HookExecutor.new(registry: registry)
+      end
+
+      def build_mcp_manager
+        Mcp::McpClientManager.new
       end
     end
   end

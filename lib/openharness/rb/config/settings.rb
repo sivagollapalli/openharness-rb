@@ -20,6 +20,7 @@ module Openharness
         attribute :model, Types::String.optional.default(nil)
         attribute :max_turns, Types::Integer.default(10)
         attribute :context_window_threshold, Types::Integer.default(100_000)
+        attribute :mcp_servers, Types::Array.default([].freeze)
 
         def self.load_file(path)
           ext = File.extname(path)
