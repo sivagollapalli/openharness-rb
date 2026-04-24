@@ -41,6 +41,16 @@ module Openharness
         attribute :description, Types::String
         attribute :content_length, Types::Integer
       end
+
+      class MemorySaved < StreamEvent
+        attribute :memory_name, Types::String
+        attribute :memory_type, Types::String.optional
+        attribute :description, Types::String
+      end
+
+      class ClarificationNeeded < StreamEvent
+        attribute :question, Types::String
+      end
     end
   end
 end

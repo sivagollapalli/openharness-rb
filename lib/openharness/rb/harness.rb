@@ -64,6 +64,7 @@ module Openharness
           max_turns: @settings.max_turns,
           permission_checker: @permission_checker,
           hook_executor: @hook_executor,
+          memory_system: @memory,
           input: @input,
           output: @output
         )

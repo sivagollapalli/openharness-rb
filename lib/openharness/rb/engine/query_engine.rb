@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "ruby_llm"
+require "json"
 require_relative "cost_tracker"
 require_relative "system_prompt_builder"
 require_relative "../errors"
@@ -43,6 +44,25 @@ module Openharness
           - Check if any skills are matching for the task. If yes, use "skill" tool to load skills dynamically if it is not loaded.
         PROMPT
 
+        MEMORY_EXTRACTION_PROMPT = <<~PROMPT
+          Based on the conversation above, extract any lessons learned, mistakes encountered,
+          important decisions made, or useful patterns discovered during this task.
+
+          Respond ONLY with a JSON array (no markdown fences). Each element should have:
+          - "name": short identifier (2-5 words, lowercase with hyphens)
+          - "description": one-line summary
+          - "type": one of "lesson", "mistake", "decision", "pattern"
+          - "content": detailed explanation (1-3 paragraphs of markdown)
+
+          If there is nothing worth remembering, respond with an empty array: []
+
+          Rules:
+          - Only extract genuinely useful insights, not trivial observations.
+          - Focus on things that would help in future similar tasks.
+          - Include specific details (file paths, commands, error messages) when relevant.
+          - Do NOT include memories about the memory system itself.
+        PROMPT
+
         def initialize(
           model:,
           tools: [],
@@ -52,6 +72,7 @@ module Openharness
           max_turns: 10,
           permission_checker: nil,
           hook_executor: nil,
+          memory_system: nil,
           input: $stdin,
           output: $stdout
         )
@@ -62,6 +83,8 @@ module Openharness
           @max_turns = max_turns
           @permission_checker = permission_checker
           @hook_executor = hook_executor
+          @memory_system = memory_system
+          @system_prompt_builder = system_prompt_builder
           @cost_tracker = CostTracker.new
           @turn_count = 0
           @input = input
@@ -73,17 +96,44 @@ module Openharness
         end
 
         def ask(message, &event_handler)
-          begin 
+          begin
+            # Rebuild system prompt with query-relevant memories
+            if message && @system_prompt_builder
+              user_context = @system_prompt_builder.build(query: message)
+              @system_prompt = build_full_system_prompt(user_context)
+              @chat = rebuild_chat_with_prompt
+            end
+
             # Set thread-locals so PermissionGuard in tools can access them
             Thread.current[:openharness_permission_checker] = @permission_checker
             Thread.current[:openharness_input] = @input
             Thread.current[:openharness_output] = @output
             Thread.current[:openharness_event_handler] = event_handler
 
+            @accumulated_text = String.new
+            @tool_used_in_query = false
             response = execute_turn(message, event_handler)
 
             while used_tools_this_turn?
+              @accumulated_text = String.new
               response = execute_turn(nil, event_handler)
+            end
+
+            # If no tools were used, the agent is asking for clarification
+            unless @tool_used_in_query
+              event_handler&.call(Models::ClarificationNeeded.new(
+                question: @accumulated_text.strip
+              ))
+              
+              follow_up = @input.gets
+              message += follow_up
+
+              response = execute_turn(message, event_handler)
+            end
+
+            # Extract and save learnings from the completed task
+            if @memory_system && @tool_used_in_query && @turn_count > 1
+              extract_and_save_memories(message, event_handler)
             end
 
             event_handler&.call(Models::AssistantTurnComplete.new(stop_reason: "end_turn"))
@@ -101,6 +151,7 @@ module Openharness
           @chat = build_chat
           @turn_count = 0
           @tool_called_this_turn = false
+          @tool_used_in_query = false
         end
 
         def add_tool(tool)
@@ -134,6 +185,7 @@ module Openharness
             end
           end
 
+          @tool_used_in_query = true if @tool_called_this_turn
           track_usage(response)
           response
         end
@@ -144,6 +196,7 @@ module Openharness
 
         def emit_text_delta(chunk, event_handler)
           return unless chunk.content
+          @accumulated_text << chunk.content if @accumulated_text
           event_handler&.call(Models::AssistantTextDelta.new(text: chunk.content))
         end
 
@@ -206,6 +259,61 @@ module Openharness
           chat.with_instructions(@system_prompt) if @system_prompt
           chat.with_tools(*@tools) unless @tools.empty?
           chat
+        end
+
+        # Rebuild the chat with an updated system prompt while preserving
+        # the existing conversation history and tool bindings.
+        def rebuild_chat_with_prompt
+          @chat.with_instructions(@system_prompt) if @system_prompt
+          @chat
+        end
+
+        def extract_and_save_memories(original_query, event_handler)
+          # Use a separate chat to extract learnings — don't pollute the main conversation
+          extraction_chat = RubyLLM.chat(model: @model)
+          extraction_chat.with_instructions("You extract structured learnings from agent conversations.")
+
+          # Build a summary of what happened in this task
+          summary = "Original task: #{original_query}\n" \
+                    "Turns used: #{@turn_count}/#{@max_turns}\n" \
+                    "Tools were called during this task."
+
+          response = extraction_chat.ask("#{summary}\n\n#{MEMORY_EXTRACTION_PROMPT}")
+          return unless response&.content
+
+          parse_and_save_memories(response.content, event_handler)
+        rescue StandardError => e
+          # Memory extraction is best-effort — never break the main flow
+          @output.puts "\e[2m⚠ Memory extraction failed: #{e.message}\e[0m"
+        end
+
+        def parse_and_save_memories(raw_json, event_handler)
+          # Strip markdown code fences if present
+          json_str = raw_json.strip
+          json_str = json_str.sub(/\A```(?:json)?\s*/, "").sub(/\s*```\z/, "")
+
+          memories = JSON.parse(json_str)
+          return unless memories.is_a?(Array) && !memories.empty?
+
+          memories.each do |mem|
+            next unless mem["name"] && mem["content"]
+
+            header = @memory_system.save_memory(
+              name: mem["name"],
+              description: mem["description"] || "",
+              content: mem["content"],
+              type: mem["type"]
+            )
+
+            event_handler&.call(Models::MemorySaved.new(
+              memory_name: header.name,
+              memory_type: header.type,
+              description: header.description || ""
+            ))
+          end
+        rescue JSON::ParserError
+          # LLM didn't return valid JSON — skip silently
+          nil
         end
 
         def build_full_system_prompt(user_context)

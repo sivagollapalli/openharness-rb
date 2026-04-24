@@ -24,13 +24,7 @@ harness = Openharness::Rb::Harness.new(
 
 in_thinking = false
 
-problem_statement = <<-STATEMENT
-  - Create new golang project name as harness-demo with golang version
-  - Added user and profile model. User has one profile
-  - User has first_name, last_name, email attributes. All string attributes
-  - profile has language, bio. All are string attributes
-  - Create user CRUD where it can create user with profile in single action
-STATEMENT
+problem_statement = "Create new golang project name as harness-demo with golang versio. Added user and profile model. User has one profile. User has first_name, last_name, email attributes. All string attributes. profile has language, bio. All are string attributes. Create user CRUD where it can create user with profile in single action"
 
 harness.query(problem_statement) do |event|
   case event

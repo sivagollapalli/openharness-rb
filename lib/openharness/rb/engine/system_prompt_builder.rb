@@ -12,10 +12,12 @@ module Openharness
           @project_root = project_root
         end
 
-        def build
+        # Build the system prompt. When a query is provided, relevant memories
+        # are loaded based on token similarity instead of dumping everything.
+        def build(query: nil)
           sections = []
           sections << build_skill_section if @skills
-          sections << build_memory_section if @memory
+          sections << build_memory_section(query: query) if @memory
           sections << build_project_context
           sections.compact.join("\n\n")
         end
@@ -32,8 +34,8 @@ module Openharness
           "#{lines.join("\n")}"
         end
 
-        def build_memory_section
-          @memory.load_memory_prompt
+        def build_memory_section(query: nil)
+          @memory.load_memory_prompt(query: query)
         end
 
         def build_project_context

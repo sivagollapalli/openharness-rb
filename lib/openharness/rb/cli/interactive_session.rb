@@ -34,6 +34,7 @@ module Openharness
           catch(:exit) do
             loop do
               @output.print "#{GREEN}> #{RESET}"
+              @output.flush
               line = @input.gets
               break if line.nil?
 
@@ -73,14 +74,27 @@ module Openharness
         end
 
         def cmd_memory(*)
-          @output.puts "Memory index: (no memories loaded)"
+          prompt = @harness.memory.load_memory_prompt
+          @output.puts prompt
         end
 
         def cmd_skill(*args)
           if args.empty?
-            @output.puts "Usage: /skill <name>"
+            entries = @harness.skill_registry.catalog_entries
+            if entries.empty?
+              @output.puts "No skills available."
+            else
+              @output.puts "Available skills:"
+              entries.each { |e| @output.puts "  #{e[:name]} — #{e[:description]}" }
+            end
           else
-            @output.puts "Skill '#{args.first}' requested."
+            begin
+              skill = @harness.skill_registry.get(args.first)
+              @output.puts "#{CYAN}📖 #{skill.name}#{RESET}: #{skill.description}"
+              @output.puts skill.content
+            rescue Openharness::Rb::SkillNotFoundError => e
+              @output.puts "#{RED}#{e.message}#{RESET}"
+            end
           end
         end
 
@@ -100,68 +114,76 @@ module Openharness
         end
 
         def process_query(message)
-          @output.puts ""
-          @in_thinking = false
-
-          @harness.query(message) do |event|
-            case event
-
-            when Models::TurnStarted
-              @output.puts "#{DIM}─── Turn #{event.turn_number}/#{event.max_turns} ───#{RESET}"
-              @in_thinking = true
-
-            when Models::AssistantTextDelta
-              if @in_thinking
-                # First text after turn start — this is the agent's thinking
-                @output.print "#{DIM}💭 #{RESET}"
-                @in_thinking = false
-              end
-              @output.print event.text
-
-            when Models::ToolExecutionStarted
-              @in_thinking = false
-              @output.puts "" # newline after any thinking text
-              @output.puts "#{YELLOW}⚡ Calling #{BOLD}#{event.tool_name}#{RESET}"
-
-            when Models::ToolExecutionCompleted
-              result_text = event.result.text
-              # Truncate long outputs for display
-              display = if result_text.length > 500
-                          result_text[0..497] + "..."
-                        else
-                          result_text
-                        end
-
-              if event.result.is_error
-                @output.puts "#{RED}   ✗ Error: #{display}#{RESET}"
-              else
-                # Show output indented, dimmed for readability
-                display.lines.first(10).each do |line|
-                  @output.puts "#{DIM}   │ #{line.rstrip}#{RESET}"
-                end
-                if result_text.lines.count > 10
-                  @output.puts "#{DIM}   │ ... (#{result_text.lines.count - 10} more lines)#{RESET}"
-                end
-              end
-              @output.puts ""
-
-            when Models::AssistantTurnComplete
-              @output.puts ""
-              summary = @harness.cost_tracker.summary
-              @output.puts "#{DIM}─── Done (#{summary[:input_tokens]} in / #{summary[:output_tokens]} out tokens) ───#{RESET}"
-              @output.puts ""
-
-            when Models::ErrorOccurred
-              @output.puts "#{RED}⚠ #{event.error}#{RESET}"
-
-            when Models::SkillLoaded
-              @output.puts "#{CYAN}📖 Skill loaded: #{BOLD}#{event.skill_name}#{RESET}#{CYAN} (#{event.content_length} chars)#{RESET}"
+          begin
+            @harness.query(message) do |event|
+              handle_event(event)
             end
+          rescue MaxTurnsExceeded
+            @output.puts "\n#{RED}⚠ Max turns (#{@harness.query_engine.max_turns}) exceeded#{RESET}\n"
+          rescue StandardError => e
+            @output.puts "\n#{RED}⚠ Error: #{e.message}#{RESET}\n"
           end
-        rescue MaxTurnsExceeded
-          @output.puts "\n#{RED}⚠ Max turns (#{@harness.query_engine.max_turns}) exceeded#{RESET}\n"
-        rescue StandardError => e
-          @output.puts "\n#{RED}⚠ Error: #{e.message}#{RESET}\n"
+        end
+
+        def handle_event(event)
+          case event
+
+          when Models::TurnStarted
+            @output.puts "#{DIM}─── Turn #{event.turn_number}/#{event.max_turns} ───#{RESET}"
+            @in_thinking = true
+
+          when Models::AssistantTextDelta
+            if @in_thinking
+              @output.print "#{DIM}💭 #{RESET}"
+              @in_thinking = false
+            end
+            @output.print event.text
+            @output.flush
+
+          when Models::ToolExecutionStarted
+            @in_thinking = false
+            @output.puts ""
+            @output.puts "#{YELLOW}⚡ Calling #{BOLD}#{event.tool_name}#{RESET}"
+
+          when Models::ToolExecutionCompleted
+            result_text = event.result.text
+            display = if result_text.length > 500
+                        result_text[0..497] + "..."
+                      else
+                        result_text
+                      end
+
+            if event.result.is_error
+              @output.puts "#{RED}   ✗ Error: #{display}#{RESET}"
+            else
+              display.lines.first(10).each do |line|
+                @output.puts "#{DIM}   │ #{line.rstrip}#{RESET}"
+              end
+              if result_text.lines.count > 10
+                @output.puts "#{DIM}   │ ... (#{result_text.lines.count - 10} more lines)#{RESET}"
+              end
+            end
+            @output.puts ""
+
+          when Models::AssistantTurnComplete
+            @output.puts ""
+            summary = @harness.cost_tracker.summary
+            @output.puts "#{DIM}─── Done (#{summary[:input_tokens]} in / #{summary[:output_tokens]} out tokens) ───#{RESET}"
+            @output.puts ""
+
+          when Models::ErrorOccurred
+            @output.puts "#{RED}⚠ #{event.error}#{RESET}"
+
+          when Models::SkillLoaded
+            @output.puts "#{CYAN}📖 Skill loaded: #{BOLD}#{event.skill_name}#{RESET}#{CYAN} (#{event.content_length} chars)#{RESET}"
+
+          when Models::MemorySaved
+            @output.puts "#{CYAN}🧠 Memory saved: #{BOLD}#{event.memory_name}#{RESET}#{CYAN} — #{event.description}#{RESET}"
+
+          when Models::ClarificationNeeded
+            @output.print "#{GREEN}> #{RESET}"
+            @output.flush
+          end
         end
       end
     end
