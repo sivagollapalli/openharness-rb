@@ -52,6 +52,7 @@ CLI options:
 | `--model` | Model identifier (e.g. gpt-4o, claude-sonnet-4-20250514) |
 | `--api-key` | API key for the provider |
 | `--cwd` | Working directory (defaults to current dir) |
+| `--resume` | Resume a previous session (UUID or path to `.json` file) |
 
 ### Slash Commands
 
@@ -64,7 +65,8 @@ Inside an interactive session:
 | `/skill <name>` | Load a skill into the conversation |
 | `/clear` | Clear conversation history |
 | `/cost` | Show token usage and cost |
-| `/exit` | Exit the session |
+| `/export` | Export conversation to a session JSON file |
+| `/exit` | Exit the session (auto-exports) |
 
 ## Programmatic Usage
 
@@ -237,7 +239,54 @@ perms = Openharness::Rb::Permissions::PermissionChecker.new(
 
 ## Hooks
 
-Hooks let you run custom logic on lifecycle events:
+Hooks let you run custom logic on lifecycle events — shell commands, HTTP webhooks, or LLM-based prompt checks. They fire automatically at key points in the agent loop.
+
+### Hook Events
+
+| Event | When it fires |
+|-------|---------------|
+| `:session_start` | When an interactive session begins |
+| `:session_end` | When an interactive session ends |
+| `:pre_tool_use` | Before a tool is executed |
+| `:post_tool_use` | After a tool finishes executing |
+
+### Hook Types
+
+| Type | What it does |
+|------|-------------|
+| `CommandHookDefinition` | Runs a shell command. Payload is available via `OPENHARNESS_HOOK_PAYLOAD` env var. |
+| `HttpHookDefinition` | POSTs the payload as JSON to a URL with optional headers. |
+| `PromptHookDefinition` | Sends a prompt (with `{{payload}}` interpolation) to the LLM and checks the response. |
+
+### Defining Hooks in a Config File
+
+Hooks can be defined in `.openharness/hooks.yml` (or any YAML/JSON file you point the registry at). Each hook specifies an event, an optional matcher (glob pattern for tool names), and the action:
+
+```yaml
+# .openharness/hooks.yml
+hooks:
+  - event: pre_tool_use
+    matcher: "bash"           # only fires for the bash tool (nil = all tools)
+    block_on_failure: true    # block the tool if the hook fails
+    type: command
+    command: "echo 'About to run bash'"
+
+  - event: post_tool_use
+    matcher: null             # fires for all tools
+    block_on_failure: false
+    type: http
+    url: "https://hooks.example.com/notify"
+    headers:
+      Authorization: "Bearer token"
+
+  - event: pre_tool_use
+    matcher: "write_to_file"
+    block_on_failure: true
+    type: prompt
+    prompt_template: "Review this write operation: {{payload}}. Respond with JSON {\"ok\": true} or {\"ok\": false, \"reason\": \"...\"}."
+```
+
+### Programmatic Registration
 
 ```ruby
 registry = Openharness::Rb::Hooks::HookRegistry.new
@@ -250,7 +299,7 @@ registry.register(Openharness::Rb::Hooks::CommandHookDefinition.new(
   command: "echo 'Tool about to run'"
 ))
 
-# POST to a webhook after tool execution
+# POST to a webhook after bash tool execution
 registry.register(Openharness::Rb::Hooks::HttpHookDefinition.new(
   event: :post_tool_use,
   matcher: "bash",
@@ -259,13 +308,70 @@ registry.register(Openharness::Rb::Hooks::HttpHookDefinition.new(
   headers: { "Authorization" => "Bearer token" }
 ))
 
+# LLM-based review before file writes
+registry.register(Openharness::Rb::Hooks::PromptHookDefinition.new(
+  event: :pre_tool_use,
+  matcher: "write_to_file",
+  block_on_failure: true,
+  prompt_template: "Review this write: {{payload}}. Respond with JSON {\"ok\": true/false}."
+))
+
 executor = Openharness::Rb::Hooks::HookExecutor.new(registry: registry)
-executor.dispatch(:pre_tool_use, payload: { tool: "bash", args: {} })
+executor.dispatch(:pre_tool_use, payload: { tool_name: "bash", arguments: { command: "ls" } })
 ```
 
-Hook types: `CommandHookDefinition`, `HttpHookDefinition`, `PromptHookDefinition`
+### Blocking vs Non-Blocking
 
-The registry supports hot-reload via file watching with `start_watching!`.
+Each hook has a `block_on_failure` flag:
+
+- `false` (default) — if the hook fails, a warning is logged but the tool still runs.
+- `true` — if the hook fails, the tool execution is blocked and an error event is emitted.
+
+### Environment Variables for Command Hooks
+
+When a `CommandHookDefinition` runs, these environment variables are set:
+
+| Variable | Description |
+|----------|-------------|
+| `OPENHARNESS_HOOK_EVENT` | The event name (e.g. `pre_tool_use`) |
+| `OPENHARNESS_HOOK_PAYLOAD` | JSON-encoded payload with tool name and arguments |
+
+### Hot Reload
+
+The `HookRegistry` supports file watching. When a config file changes on disk, hooks are automatically reloaded:
+
+```ruby
+registry = Openharness::Rb::Hooks::HookRegistry.new(
+  config_paths: [".openharness/hooks.yml"]
+)
+registry.start_watching!
+
+# ... hooks are reloaded when the file changes ...
+
+registry.stop_watching!
+```
+
+### CLI Usage
+
+Hooks are active during interactive sessions. The `Harness` creates a `HookExecutor` automatically, so any hooks registered in the registry fire during tool execution.
+
+To see hooks in action during a session, watch for the hook-related output:
+
+```bash
+# Start a session — hooks fire automatically during tool use
+openharness start --model gpt-4o --api-key sk-your-key
+
+> Write a hello world file
+─── Turn 1/10 ───
+⚡ Calling write_to_file        # pre_tool_use hooks fire here
+   │ File written: hello.rb     # post_tool_use hooks fire here
+```
+
+If a blocking hook fails, you'll see an error:
+
+```
+⚠ Hook failed for 'write_to_file': Command exited with non-zero status
+```
 
 ## Skills
 
@@ -504,6 +610,102 @@ prompt = memory.load_memory_prompt
 ### CLI
 
 Inside an interactive session, use the `/memory` slash command to display the current memory index.
+
+## Sessions
+
+Every interactive session is automatically tracked and can be exported to a JSON file for later review or resumption. Session files are stored in `.openharness/sessions/` as `<uuid>.json`.
+
+### How It Works
+
+1. When a `Harness` is created, a new session is started with a unique UUID.
+2. Every user message, assistant response, tool call, and tool result is recorded in the session log.
+3. On `/exit`, the full conversation is auto-exported to `.openharness/sessions/<uuid>.json`.
+4. You can also export mid-session with `/export`.
+
+### Directory Layout
+
+```
+your-project/
+└── .openharness/
+    └── sessions/
+        ├── a1b2c3d4-e5f6-7890-abcd-ef1234567890.json
+        └── f9e8d7c6-b5a4-3210-fedc-ba0987654321.json
+```
+
+### Session File Format
+
+Each session file contains the full conversation log:
+
+```json
+{
+  "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "started_at": "2026-04-29T10:00:00+05:30",
+  "exported_at": "2026-04-29T10:15:00+05:30",
+  "metadata": { "model": "gpt-4o" },
+  "cost": { "input_tokens": 5200, "output_tokens": 1800, "total_cost": 0.0 },
+  "conversation": [
+    { "role": "user", "content": "Create a hello world app", "timestamp": "..." },
+    { "role": "tool_call", "tool_name": "write_to_file", "tool_use_id": "...", "arguments": { "path": "hello.rb" }, "timestamp": "..." },
+    { "role": "tool_result", "tool_use_id": "...", "result": "File written", "timestamp": "..." },
+    { "role": "assistant", "content": "Done! I created hello.rb for you.", "timestamp": "..." }
+  ]
+}
+```
+
+### Exporting a Session
+
+From the CLI during an interactive session:
+
+```
+> /export
+✓ Session exported to .openharness/sessions/a1b2c3d4-e5f6-7890-abcd-ef1234567890.json
+```
+
+Sessions are also auto-exported when you `/exit`.
+
+Programmatically:
+
+```ruby
+harness = Openharness::Rb::Harness.new(api_key: "sk-key", model: "gpt-4o")
+
+harness.query("Create a hello world app") do |event|
+  print event.text if event.is_a?(Openharness::Rb::Models::AssistantTextDelta)
+end
+
+# Export the session at any point
+path = harness.export_session
+puts "Saved to #{path}"
+
+# Access the session ID
+puts harness.session_id
+```
+
+### Resuming a Session
+
+Resume a previous session from the CLI using `--resume` with a UUID or file path. The prior conversation is replayed into the LLM context so it picks up where you left off:
+
+```bash
+# Resume by UUID (looks in .openharness/sessions/)
+openharness start --resume a1b2c3d4-e5f6-7890-abcd-ef1234567890
+
+# Resume by file path
+openharness start --resume .openharness/sessions/a1b2c3d4-e5f6-7890-abcd-ef1234567890.json
+```
+
+Programmatically:
+
+```ruby
+harness = Openharness::Rb::Harness.new(
+  api_key: "sk-key",
+  model: "gpt-4o",
+  resume_from: ".openharness/sessions/a1b2c3d4.json"
+)
+
+# The agent has full context from the previous session.
+harness.query("Now add tests for what we built") do |event|
+  print event.text if event.is_a?(Openharness::Rb::Models::AssistantTextDelta)
+end
+```
 
 ## MCP Integration
 
