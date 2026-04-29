@@ -73,6 +73,7 @@ module Openharness
           permission_checker: nil,
           hook_executor: nil,
           memory_system: nil,
+          session_storage: nil,
           input: $stdin,
           output: $stdout
         )
@@ -84,6 +85,7 @@ module Openharness
           @permission_checker = permission_checker
           @hook_executor = hook_executor
           @memory_system = memory_system
+          @session_storage = session_storage
           @system_prompt_builder = system_prompt_builder
           @cost_tracker = CostTracker.new
           @turn_count = 0
@@ -112,6 +114,10 @@ module Openharness
 
             @accumulated_text = String.new
             @tool_used_in_query = false
+
+            # Record user message in session
+            @session_storage&.record_user_message(message) if message
+
             response = execute_turn(message, event_handler)
 
             while used_tools_this_turn?
@@ -135,6 +141,9 @@ module Openharness
             if @memory_system && @tool_used_in_query && @turn_count > 1
               extract_and_save_memories(message, event_handler)
             end
+
+            # Record assistant response in session
+            @session_storage&.record_assistant_message(@accumulated_text.strip) unless @accumulated_text.strip.empty?
 
             event_handler&.call(Models::AssistantTurnComplete.new(stop_reason: "end_turn"))
             response
@@ -204,6 +213,13 @@ module Openharness
           @chat.on_tool_call do |tool_call|
             @tool_called_this_turn = true
 
+            # Record tool call in session
+            @session_storage&.record_tool_call(
+              tool_name: tool_call.name.to_s,
+              tool_use_id: tool_call.id.to_s,
+              arguments: tool_call.arguments
+            )
+
             # Pre-tool hook
             dispatch_hook(Hooks::HookEvent::PRE_TOOL_USE, tool_call, event_handler)
 
@@ -214,6 +230,12 @@ module Openharness
           end
 
           @chat.on_tool_result do |result|
+            # Record tool result in session
+            @session_storage&.record_tool_result(
+              tool_use_id: "latest",
+              result: result.to_s
+            )
+
             if @hook_executor
               @hook_executor.dispatch(
                 Hooks::HookEvent::POST_TOOL_USE,

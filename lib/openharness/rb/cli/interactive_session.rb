@@ -10,6 +10,7 @@ module Openharness
           "/skill" => :cmd_skill,
           "/clear" => :cmd_clear,
           "/cost" => :cmd_cost,
+          "/export" => :cmd_export,
           "/exit" => :cmd_exit
         }.freeze
 
@@ -22,15 +23,16 @@ module Openharness
         BOLD = "\e[1m"
         RESET = "\e[0m"
 
-        def initialize(settings:, input: $stdin, output: $stdout)
+        def initialize(settings:, input: $stdin, output: $stdout, resume_from: nil)
           @settings = settings
           @input = input
           @output = output
-          @harness = Harness.new(settings: settings)
+          @harness = Harness.new(settings: settings, resume_from: resume_from)
         end
 
         def run
-          @output.puts "#{BOLD}OpenHarness#{RESET} interactive session. Type /help for commands.\n\n"
+          @output.puts "#{BOLD}OpenHarness#{RESET} interactive session. Type /help for commands."
+          @output.puts "#{DIM}Session: #{@harness.session_id}#{RESET}\n\n"
           catch(:exit) do
             loop do
               @output.print "#{GREEN}> #{RESET}"
@@ -48,6 +50,8 @@ module Openharness
               end
             end
           end
+          path = @harness.export_session
+          @output.puts "#{DIM}Session saved to #{path}#{RESET}"
           @output.puts "Goodbye!"
         end
 
@@ -70,6 +74,7 @@ module Openharness
           @output.puts "  /skill   - Load a skill (usage: /skill <name>)"
           @output.puts "  /clear   - Clear conversation history"
           @output.puts "  /cost    - Show token usage and cost"
+          @output.puts "  /export  - Export conversation to session file"
           @output.puts "  /exit    - Exit the session"
         end
 
@@ -107,6 +112,11 @@ module Openharness
           summary = @harness.cost_tracker.summary
           @output.puts "Tokens — input: #{summary[:input_tokens]}, output: #{summary[:output_tokens]}"
           @output.puts "Total cost: $#{'%.4f' % summary[:total_cost]}"
+        end
+
+        def cmd_export(*)
+          path = @harness.export_session
+          @output.puts "#{GREEN}✓ Session exported to #{path}#{RESET}"
         end
 
         def cmd_exit(*)

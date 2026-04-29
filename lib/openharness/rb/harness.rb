@@ -4,9 +4,9 @@ module Openharness
   module Rb
     class Harness
       attr_reader :settings, :query_engine, :permission_checker, :hook_executor,
-                  :mcp_manager, :skill_registry, :memory
+                  :mcp_manager, :skill_registry, :memory, :session
 
-      def initialize(settings: nil, input: $stdin, output: $stdout, **overrides)
+      def initialize(settings: nil, input: $stdin, output: $stdout, resume_from: nil, **overrides)
         @settings = settings || Config::Settings.new(**overrides)
         @input = input
         @output = output
@@ -15,7 +15,9 @@ module Openharness
         @mcp_manager = build_mcp_manager
         @skill_registry = build_skill_registry
         @memory = build_memory_system
+        @session = build_session_storage
         @query_engine = build_query_engine
+        replay_session(resume_from) if resume_from
         print_loaded_skills
       end
 
@@ -52,6 +54,19 @@ module Openharness
         @query_engine.cost_tracker
       end
 
+      def session_id
+        @session.session_id
+      end
+
+      # Export the current conversation to a JSON file.
+      # Returns the file path.
+      def export_session
+        @session.export(
+          cost_summary: cost_tracker.summary,
+          metadata: { model: @settings.model }
+        )
+      end
+
       private
 
       def build_query_engine
@@ -65,6 +80,7 @@ module Openharness
           permission_checker: @permission_checker,
           hook_executor: @hook_executor,
           memory_system: @memory,
+          session_storage: @session,
           input: @input,
           output: @output
         )
@@ -150,6 +166,27 @@ module Openharness
 
       def build_memory_system
         Memory::MemorySystem.new
+      end
+
+      def build_session_storage
+        Session::SessionStorage.new
+      end
+
+      # Replay a previous session's conversation into the current chat
+      # so the LLM has the full context from the prior session.
+      def replay_session(file_path)
+        data = Session::SessionStorage.load(file_path)
+        @output.puts "\e[2m📂 Resuming session #{data[:session_id]} (#{data[:conversation].length} messages)\e[0m"
+
+        data[:conversation].each do |entry|
+          role = entry[:role]
+          case role
+          when "user"
+            @query_engine.chat.ask(entry[:content]) { |_| } # replay silently
+          end
+        end
+      rescue StandardError => e
+        @output.puts "\e[31m⚠ Failed to resume session: #{e.message}\e[0m"
       end
 
       def print_loaded_skills
