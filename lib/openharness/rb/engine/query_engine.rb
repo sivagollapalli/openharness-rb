@@ -2,6 +2,7 @@
 
 require "ruby_llm"
 require "json"
+require "async"
 require_relative "cost_tracker"
 require_relative "system_prompt_builder"
 require_relative "../errors"
@@ -44,9 +45,19 @@ module Openharness
           - Check if any skills are matching for the task. If yes, use "skill" tool to load skills dynamically if it is not loaded.
         PROMPT
 
+        CLASSIFIER_PROMPT = <<~PROMPT
+          Given the task and its outcome decide whether its worth extracting memories.
+          Always return either 0 or 1. Return 0 if the task is ephemeral/one-shot, return 1 if it contains useful lessons.
+
+          Examples:
+          - "List files in directory" → 0 (trivial, no lesson)
+          - "Fix authentication bug by adding token refresh" → 1 (lesson learned)
+          - "What time is it?" → 0 (ephemeral)
+          - "Set up PostgreSQL with specific config after failed attempts" → 1 (mistake + fix)
+        PROMPT
+
         MEMORY_EXTRACTION_PROMPT = <<~PROMPT
-          Based on the conversation above, extract any lessons learned, mistakes encountered,
-          important decisions made, or useful patterns discovered during this task.
+          Given this task and its outcome, extract memory items worth storing for future tasks.
 
           Respond ONLY with a JSON array (no markdown fences). Each element should have:
           - "name": short identifier (2-5 words, lowercase with hyphens)
@@ -137,13 +148,13 @@ module Openharness
               response = execute_turn(message, event_handler)
             end
 
-            # Extract and save learnings from the completed task
-            if @memory_system && @tool_used_in_query && @turn_count > 1
-              extract_and_save_memories(message, event_handler)
-            end
-
             # Record assistant response in session
             @session_storage&.record_assistant_message(@accumulated_text.strip) unless @accumulated_text.strip.empty?
+
+            # Extract and save learnings from the completed task
+            if @memory_system && @tool_used_in_query && @turn_count > 1
+              extract_and_save_memories(message)
+            end
 
             event_handler&.call(Models::AssistantTurnComplete.new(stop_reason: "end_turn"))
             response
@@ -290,26 +301,37 @@ module Openharness
           @chat
         end
 
-        def extract_and_save_memories(original_query, event_handler)
-          # Use a separate chat to extract learnings — don't pollute the main conversation
-          extraction_chat = RubyLLM.chat(model: @model)
-          extraction_chat.with_instructions("You extract structured learnings from agent conversations.")
+        def extract_and_save_memories(original_query)
+          Async do
+            begin
+              # Build a summary of what happened in this task
+              summary = "Original task: #{original_query}\n" \
+                        "Turns used: #{@turn_count}/#{@max_turns}\n" \
+                        "Tools were called during this task."
 
-          # Build a summary of what happened in this task
-          summary = "Original task: #{original_query}\n" \
-                    "Turns used: #{@turn_count}/#{@max_turns}\n" \
-                    "Tools were called during this task."
+              # Step 1: Classify whether this task is worth remembering
+              classifier = RubyLLM.chat(model: @model)
+              classifier.with_instructions("You are a classifier. You decide whether we should extract memories from a given task. Respond with only 0 or 1.")
+              classify_response = classifier.ask("#{summary}\n\n#{CLASSIFIER_PROMPT}")
 
-          response = extraction_chat.ask("#{summary}\n\n#{MEMORY_EXTRACTION_PROMPT}")
-          return unless response&.content
+              return unless classify_response&.content&.strip == "1"
 
-          parse_and_save_memories(response.content, event_handler)
-        rescue StandardError => e
-          # Memory extraction is best-effort — never break the main flow
-          @output.puts "\e[2m⚠ Memory extraction failed: #{e.message}\e[0m"
+              # Step 2: Extract structured memories
+              extraction_chat = RubyLLM.chat(model: @model)
+              extraction_chat.with_instructions("You extract structured learnings from agent conversations.")
+
+              response = extraction_chat.ask("#{summary}\n\n#{MEMORY_EXTRACTION_PROMPT}")
+              return unless response&.content
+
+              parse_and_save_memories(response.content)
+            rescue StandardError => e
+              # Memory extraction is best-effort — never break the main flow
+              @output.puts "\e[2m⚠ Memory extraction failed: #{e.message}\e[0m"
+            end
+          end
         end
 
-        def parse_and_save_memories(raw_json, event_handler)
+        def parse_and_save_memories(raw_json)
           # Strip markdown code fences if present
           json_str = raw_json.strip
           json_str = json_str.sub(/\A```(?:json)?\s*/, "").sub(/\s*```\z/, "")
@@ -326,12 +348,6 @@ module Openharness
               content: mem["content"],
               type: mem["type"]
             )
-
-            event_handler&.call(Models::MemorySaved.new(
-              memory_name: header.name,
-              memory_type: header.type,
-              description: header.description || ""
-            ))
           end
         rescue JSON::ParserError
           # LLM didn't return valid JSON — skip silently

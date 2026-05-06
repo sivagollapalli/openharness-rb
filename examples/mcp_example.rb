@@ -1,4 +1,4 @@
-require "../lib/openharness/rb"
+require "./lib/openharness/rb"
 
 DIM = "\e[2m"
 CYAN = "\e[36m"
@@ -20,7 +20,7 @@ harness = Openharness::Rb::Harness.new(
 
 in_thinking = false
 
-harness.query("open google.com website in a browser, enter Ruby on Rails and then click on search and get the first 5 results websites") do |event|
+harness.query("go to https://www.goibibo.com/ website in a browser book a flight for hyderabad to vijayawada for tomorrow evening indigo flight") do |event|
   case event
 
   when Openharness::Rb::Models::TurnStarted
