@@ -846,57 +846,6 @@ Failed MCP connections log a warning and continue without those tools. The harne
 MCP server 'broken-server' failed to connect: Connection refused
 ```
 
-## Multi-Agent Coordination
-
-Coordinate multiple agents with mailbox messaging:
-
-```ruby
-registry = Openharness::Rb::Agents::TeamRegistry.new
-
-registry.register(Openharness::Rb::Agents::AgentDefinition.new(
-  name: "coder",
-  role: "developer",
-  capabilities: ["write_code", "debug"],
-  tool_access: ["read_file", "write_to_file", "bash"]
-))
-
-registry.register(Openharness::Rb::Agents::AgentDefinition.new(
-  name: "reviewer",
-  role: "code_reviewer",
-  capabilities: ["review_code"]
-))
-
-# Send messages between agents
-registry.send_message(from: "coder", to: "reviewer", content: "Please review PR #42")
-messages = registry.receive_messages("reviewer")
-```
-
-## Plugins
-
-Plugins bundle skills, hooks, agents, and MCP servers in a directory:
-
-```
-~/.openharness/plugins/my-plugin/
-  plugin.json
-  skills/
-    my-skill.md
-```
-
-```json
-{
-  "name": "my-plugin",
-  "version": "1.0.0",
-  "skills": ["my-skill"],
-  "hooks": [],
-  "mcp_servers": []
-}
-```
-
-```ruby
-loader = Openharness::Rb::Plugins::PluginLoader.new
-plugins = loader.load_all
-```
-
 ## Architecture
 
 ```
