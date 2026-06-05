@@ -82,7 +82,10 @@ module Openharness
           memory_system: @memory,
           session_storage: @session,
           input: @input,
-          output: @output
+          output: @output,
+          summarize_threshold: @settings.summarize_threshold,
+          compact_threshold: @settings.compact_threshold,
+          context_strategy: @settings.context_strategy
         )
       end
 

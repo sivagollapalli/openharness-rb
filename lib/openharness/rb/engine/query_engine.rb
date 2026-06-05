@@ -23,7 +23,7 @@ module Openharness
       class QueryEngine
         include Api::RetryHandler
 
-        attr_reader :cost_tracker, :chat, :turn_count, :max_turns
+        attr_reader :cost_tracker, :chat, :turn_count, :max_turns, :context_manager
 
         REACT_SYSTEM_PROMPT = <<~PROMPT
           You are an autonomous agent that accomplishes tasks by reasoning step-by-step and using tools.
@@ -85,6 +85,9 @@ module Openharness
           hook_executor: nil,
           memory_system: nil,
           session_storage: nil,
+          summarize_threshold: 0.25,
+          compact_threshold: 0.50,
+          context_strategy: nil,
           input: $stdin,
           output: $stdout
         )
@@ -106,6 +109,18 @@ module Openharness
           user_context = system_prompt || system_prompt_builder&.build
           @system_prompt = build_full_system_prompt(user_context)
           @chat = build_chat
+
+          # Initialize context management
+          context_window = Context::ContextManager.resolve_context_window(@model)
+          thresholds = Context::Thresholds.new(
+            summarize_ratio: summarize_threshold,
+            compact_ratio: compact_threshold
+          )
+          @context_manager = Context::ContextManager.new(
+            context_window: context_window,
+            thresholds: thresholds,
+            strategy: context_strategy || Context::DefaultStrategy.new
+          )
         end
 
         def ask(message, &event_handler)
@@ -172,6 +187,7 @@ module Openharness
           @turn_count = 0
           @tool_called_this_turn = false
           @tool_used_in_query = false
+          @context_manager.reset!
         end
 
         def add_tool(tool)
@@ -285,6 +301,35 @@ module Openharness
             output_tokens: response.output_tokens || 0,
             cost: 0.0
           )
+
+          # Check context thresholds and manage if needed
+          messages_before = @chat.messages.size
+          action = @context_manager.check_and_manage!(@chat, response)
+          messages_after = @chat.messages.size
+
+          emit_context_event(action, messages_before, messages_after) unless action == :none
+        end
+
+        def emit_context_event(action, messages_before, messages_after)
+          event_handler = Thread.current[:openharness_event_handler]
+          return unless event_handler
+
+          ratio = @context_manager.usage_ratio
+
+          case action
+          when :summarized
+            event_handler.call(Models::ContextSummarized.new(
+              usage_ratio: ratio,
+              messages_before: messages_before,
+              messages_after: messages_after
+            ))
+          when :compacted
+            event_handler.call(Models::ContextCompacted.new(
+              usage_ratio: ratio,
+              messages_before: messages_before,
+              messages_after: messages_after
+            ))
+          end
         end
 
         def build_chat
@@ -310,11 +355,11 @@ module Openharness
                         "Tools were called during this task."
 
               # Step 1: Classify whether this task is worth remembering
-              classifier = RubyLLM.chat(model: @model)
-              classifier.with_instructions("You are a classifier. You decide whether we should extract memories from a given task. Respond with only 0 or 1.")
-              classify_response = classifier.ask("#{summary}\n\n#{CLASSIFIER_PROMPT}")
+              # classifier = RubyLLM.chat(model: @model)
+              # classifier.with_instructions("You are a classifier. You decide whether we should extract memories from a given task. Respond with only 0 or 1.")
+              # classify_response = classifier.ask("#{summary}\n\n#{CLASSIFIER_PROMPT}")
 
-              return unless classify_response&.content&.strip == "1"
+              # return unless classify_response&.content&.strip == "1"
 
               # Step 2: Extract structured memories
               extraction_chat = RubyLLM.chat(model: @model)

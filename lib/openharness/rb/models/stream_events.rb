@@ -51,6 +51,18 @@ module Openharness
       class ClarificationNeeded < StreamEvent
         attribute :question, Types::String
       end
+
+      class ContextSummarized < StreamEvent
+        attribute :usage_ratio, Types::Float
+        attribute :messages_before, Types::Integer
+        attribute :messages_after, Types::Integer
+      end
+
+      class ContextCompacted < StreamEvent
+        attribute :usage_ratio, Types::Float
+        attribute :messages_before, Types::Integer
+        attribute :messages_after, Types::Integer
+      end
     end
   end
 end

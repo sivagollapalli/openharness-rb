@@ -20,6 +20,9 @@ module Openharness
         attribute :model, Types::String.optional.default(nil)
         attribute :max_turns, Types::Integer.default(10)
         attribute :context_window_threshold, Types::Integer.default(100_000)
+        attribute :summarize_threshold, Types::Float.default(0.25)
+        attribute :compact_threshold, Types::Float.default(0.50)
+        attribute :context_strategy, Types::Any.optional.default(nil)
         attribute :mcp_servers, Types::Array.default([].freeze)
 
         def self.load_file(path)
